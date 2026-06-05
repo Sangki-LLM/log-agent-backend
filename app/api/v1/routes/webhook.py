@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.server import AnalysisRecord, Server
+from app.models.server import AnalysisRecord, Server, ServerHost
 from app.schemas.server import ErrorEventPayload
 from app.services import ollama_service, slack_service
 
@@ -39,9 +39,11 @@ async def receive_error(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    # 등록된 서버인지 IP로 확인
+    # 등록된 서버인지 IP로 확인 (ServerHost 테이블 경유)
     result = await db.execute(
-        select(Server).where(Server.host == payload.server_ip, Server.is_active == True)
+        select(Server)
+        .join(ServerHost, ServerHost.server_id == Server.id)
+        .where(ServerHost.host == payload.server_ip, Server.is_active == True)
     )
     server = result.scalar_one_or_none()
 
