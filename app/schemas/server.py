@@ -40,4 +40,8 @@ class ErrorEventPayload(BaseModel):
     request_url: str = ""
     request_body: str = ""
     response_status: int = 500
-    git_commit: str = ""
+
+
+class DeployEventPayload(BaseModel):
+    server_ip: str
+    git_commit: str
