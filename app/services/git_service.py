@@ -48,8 +48,9 @@ def get_remote_head(server_id: int, branch: str) -> str:
     path = _repo_path(server_id)
     with Repo(str(path)) as repo:
         ref_key = f"refs/remotes/origin/{branch}".encode()
-        sha_bytes = repo.refs[ref_key]
-        return sha_bytes.hex()
+        sha = repo.refs[ref_key]
+        # dulwich refs return hex SHA as ascii bytes, not binary
+        return sha.decode("ascii") if isinstance(sha, bytes) else sha
 
 
 def read_files_at_commit(server_id: int, commit_hash: str, stack_trace: str) -> dict[str, str]:
