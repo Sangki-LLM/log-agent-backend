@@ -11,8 +11,16 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a senior DevSecOps engineer analyzing server error logs.
-Use the provided tools to search for and read relevant source files before analyzing.
-When done, respond ONLY in this JSON structure (no markdown, no code fences):
+
+Follow this strategy to gather context before analyzing:
+1. If the error log contains a Java/Kotlin stack trace, extract the fully-qualified class name
+   and call read_file with the path (e.g. "at com.example.foo.BarService" → read_file("src/main/java/com/example/foo/BarService.java")).
+   Also try src/test/java/ if src/main/java/ is not found.
+2. After reading the direct source, use search_files to find related config, service, or dependency files
+   that may be the root cause (e.g. @Configuration, @Bean, injected services).
+3. Once you have enough context (or after a few attempts), stop calling tools and respond.
+
+Respond ONLY in this JSON structure (no markdown, no code fences):
 {
   "error_cause": "<brief root cause in Korean>",
   "bottleneck": "<suspected bottleneck or affected component>",
@@ -115,12 +123,20 @@ async def analyze_log(server_id: int, raw_log: str) -> str:
         timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)
     ) as client:
         for iteration in range(_MAX_TOOL_ITERATIONS):
+            # 마지막 2번 남았으면 도구 없이 강제 응답 유도
+            tools_payload = TOOLS if iteration < _MAX_TOOL_ITERATIONS - 2 else []
+            if not tools_payload and iteration > 0:
+                messages.append({
+                    "role": "user",
+                    "content": "지금까지 수집한 정보를 바탕으로 JSON 형식으로 분석 결과를 응답해줘.",
+                })
+
             response = await client.post(
                 f"{settings.ollama_host}/api/chat",
                 json={
                     "model": settings.ollama_model,
                     "messages": messages,
-                    "tools": TOOLS,
+                    "tools": tools_payload,
                     "stream": False,
                 },
             )
