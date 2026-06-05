@@ -9,6 +9,14 @@ class ServerCreate(BaseModel):
     github_token: str = ""
 
 
+class ServerUpdate(BaseModel):
+    name: str | None = None
+    hosts: list[str] | None = None
+    git_repo_url: str | None = None
+    git_branch: str | None = None
+    github_token: str | None = None
+
+
 class ServerResponse(BaseModel):
     model_config = {"from_attributes": True}
 
