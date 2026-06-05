@@ -42,6 +42,8 @@ async def receive_error(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info(f"Webhook received: server_ip={payload.server_ip}, error_type={payload.error_type}")
+
     # 등록된 서버인지 IP로 확인 (ServerHost 테이블 경유)
     result = await db.execute(
         select(Server)
@@ -51,6 +53,7 @@ async def receive_error(
     server = result.scalar_one_or_none()
 
     if not server:
+        logger.warning(f"Webhook ignored: Server not found or inactive for IP {payload.server_ip}")
         return {"status": "ignored"}
 
     # 60초 내 동일 에러 중복 방지
