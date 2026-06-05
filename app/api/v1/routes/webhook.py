@@ -81,7 +81,6 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         raw_log = _build_raw_log(payload)
         trigger_line = f"{payload.error_type}: {payload.message}"[:500]
 
-        source_files: dict[str, str] = {}
         try:
             logger.info("[pipeline] git fetch — server_id=%s repo=%s", server.id, server.git_repo_url)
             await asyncio.to_thread(
@@ -95,23 +94,12 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
                 logger.info("[pipeline] RAG indexing start")
                 chunks = await asyncio.to_thread(git_service.list_all_files_at_commit, server.id, commit)
                 await rag_service.index_repo(server.id, commit, chunks)
-
-            # RAG 검색 + 스택 트레이스 파일 병합
-            query = f"{payload.error_type}: {payload.message}\n{payload.stack_trace[:500]}"
-            rag_paths = await rag_service.search_relevant_files(server.id, query, n_results=5)
-            stack_paths = list(git_service.read_files_at_commit(server.id, commit, payload.stack_trace or "").keys())
-
-            all_paths = list(dict.fromkeys(stack_paths + rag_paths))  # stack trace 직접 추출 파일 우선
-            logger.info("[pipeline] RAG paths=%s stack paths=%s", rag_paths, stack_paths)
-
-            source_files = await asyncio.to_thread(git_service.read_files_by_paths, server.id, commit, all_paths)
-            logger.info("[pipeline] source files=%s", list(source_files.keys()))
         except Exception as e:
             logger.warning("[pipeline] git/rag step failed: %s", e, exc_info=True)
 
-        logger.info("[pipeline] calling ollama — files=%d", len(source_files))
+        logger.info("[pipeline] calling ollama (agentic)")
         try:
-            suggestion = await ollama_service.analyze_log(raw_log, source_files)
+            suggestion = await ollama_service.analyze_log(server.id, raw_log)
             logger.info("[pipeline] ollama response length=%d", len(suggestion or ""))
         except Exception as e:
             logger.error("[pipeline] ollama failed: %s", e, exc_info=True)
