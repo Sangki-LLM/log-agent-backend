@@ -8,10 +8,8 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "gemma4:12b"
 
-    # Slack
-    slack_bot_token: str = ""
-    slack_signing_secret: str = ""
-    slack_channel_id: str = ""
+    # Slack Incoming Webhook
+    slack_webhook_url: str = ""
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./agent.db"
@@ -19,8 +17,9 @@ class Settings(BaseSettings):
     # Security
     pem_encryption_key: str = ""
 
-    # Agent backend public URL (for Slack webhook callbacks)
+    # Public URL of this backend (for Slack approve/reject links)
     public_url: str = "http://localhost:8000"
+    frontend_url: str = "http://localhost:5173"
 
 
 settings = Settings()

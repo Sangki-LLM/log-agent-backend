@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.routes import analysis, servers, slack_events, webhook
+from app.api.v1.routes import analysis, servers, webhook
 from app.core.config import settings
 from app.core.database import init_db
 
@@ -32,7 +32,6 @@ app.add_middleware(
 app.include_router(servers.router, prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
 app.include_router(webhook.router, prefix="/api/v1")
-app.include_router(slack_events.router, prefix="/api/v1")
 
 
 @app.get("/health")

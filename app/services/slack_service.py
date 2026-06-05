@@ -1,93 +1,92 @@
 import json
 
-from slack_sdk.web.async_client import AsyncWebClient
+import httpx
 
 from app.core.config import settings
 from app.models.server import AnalysisRecord, Server
 
 
-def _client() -> AsyncWebClient:
-    return AsyncWebClient(token=settings.slack_bot_token)
-
-
-def _build_analysis_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
+def _build_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
     try:
         suggestion = json.loads(record.llm_suggestion or "{}")
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         suggestion = {}
 
     error_cause = suggestion.get("error_cause", "분석 중...")
-    fix_code = suggestion.get("suggested_fix", record.llm_suggestion or "")
+    bottleneck = suggestion.get("bottleneck", "")
+    fix_code = suggestion.get("suggested_fix", record.llm_suggestion or "")[:1200]
 
-    return [
+    approve_url = f"{settings.public_url}/api/v1/analysis/approve/{record.id}"
+    reject_url = f"{settings.public_url}/api/v1/analysis/reject/{record.id}"
+
+    blocks = [
         {
             "type": "header",
             "text": {"type": "plain_text", "text": f"🔴 [{server.name}] 에러 감지"},
         },
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*원인:* {error_cause}"},
+            "fields": [
+                {"type": "mrkdwn", "text": f"*원인*\n{error_cause}"},
+                {"type": "mrkdwn", "text": f"*병목 지점*\n{bottleneck or 'N/A'}"},
+            ],
         },
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*트리거 라인:*\n```{record.trigger_line[:300]}```",
+                "text": f"*트리거 로그*\n```{record.trigger_line[:300]}```",
             },
         },
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*추천 수정 코드:*\n{fix_code[:1500]}",
+                "text": f"*추천 수정 코드*\n{fix_code}",
             },
         },
+        {"type": "divider"},
         {
             "type": "actions",
             "elements": [
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "✅ 수락 & Push"},
-                    "action_id": "approve_fix",
-                    "value": str(record.id),
                     "style": "primary",
+                    "url": approve_url,
                 },
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "❌ 거절"},
-                    "action_id": "reject_fix",
-                    "value": str(record.id),
                     "style": "danger",
+                    "url": reject_url,
                 },
             ],
         },
     ]
+    return blocks
 
 
 async def send_analysis(server: Server, record: AnalysisRecord) -> str:
-    if not settings.slack_bot_token:
+    if not settings.slack_webhook_url:
         return ""
-    client = _client()
-    response = await client.chat_postMessage(
-        channel=settings.slack_channel_id,
-        blocks=_build_analysis_blocks(server, record),
-        text=f"[{server.name}] 에러 감지 및 LLM 분석 완료",
-    )
-    return response["ts"]
+
+    payload = {
+        "text": f"[{server.name}] 에러 감지 — LLM 분석 완료",
+        "blocks": _build_blocks(server, record),
+    }
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(settings.slack_webhook_url, json=payload)
+        resp.raise_for_status()
+
+    return ""
 
 
-async def update_message(ts: str, text: str) -> None:
-    if not settings.slack_bot_token or not ts:
+async def send_result(text: str) -> None:
+    if not settings.slack_webhook_url:
         return
-    client = _client()
-    await client.chat_update(
-        channel=settings.slack_channel_id,
-        ts=ts,
-        text=text,
-        blocks=[
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": text},
-            }
-        ],
-    )
+    payload = {"text": text}
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(settings.slack_webhook_url, json=payload)
+        resp.raise_for_status()
