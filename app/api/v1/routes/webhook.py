@@ -71,6 +71,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
     from app.core.database import AsyncSessionLocal
     from app.services import git_service
 
+    print(f"[pipeline] start — server={server.name} error={payload.error_type}", flush=True)
     logger.info("[pipeline] start — server=%s error=%s", server.name, payload.error_type)
 
     async with AsyncSessionLocal() as db:
