@@ -87,7 +87,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
             try:
                 logger.info("[pipeline] git fetch — server_id=%s repo=%s", server.id, server.git_repo_url)
                 await asyncio.to_thread(
-                    git_service.fetch, server.id, server.git_repo_url, server.github_token or ""
+                    git_service.fetch, server.id, server.git_repo_url, server.git_branch, server.github_token or ""
                 )
                 commit = await asyncio.to_thread(
                     git_service.get_remote_head, server.id, server.git_branch

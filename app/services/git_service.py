@@ -28,11 +28,14 @@ def clone(server_id: int, repo_url: str, branch: str, token: str = "") -> None:
     )
 
 
-def fetch(server_id: int, repo_url: str = "", token: str = "") -> None:
-    """원격 변경사항을 가져오되 working tree는 건드리지 않음."""
+def fetch(server_id: int, repo_url: str = "", branch: str = "main", token: str = "") -> None:
+    """원격 변경사항을 가져오되 working tree는 건드리지 않음. 미클론 시 자동 clone."""
     path = _repo_path(server_id)
     if not path.exists():
-        raise FileNotFoundError(f"Repo not cloned for server {server_id}")
+        if not repo_url:
+            raise FileNotFoundError(f"Repo not cloned for server {server_id} and no repo_url provided")
+        clone(server_id, repo_url, branch, token)
+        return
     remote = _auth_url(repo_url, token) if repo_url and token else "--all"
     subprocess.run(
         ["git", "-C", str(path), "fetch", remote, "--quiet"],
