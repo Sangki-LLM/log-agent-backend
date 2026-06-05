@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.routes import analysis, servers, slack_events, webhook
 from app.core.config import settings
 from app.core.database import init_db
+from app.middleware.logging import HttpLoggingMiddleware
 
 
 @asynccontextmanager
@@ -29,6 +30,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(HttpLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://log-agent.sangkihan.co.kr", "http://localhost:6000", "http://localhost:6001"],
