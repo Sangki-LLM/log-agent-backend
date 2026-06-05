@@ -29,31 +29,20 @@ def clone(server_id: int, repo_url: str, branch: str, token: str = "") -> None:
         _auth_url(repo_url, token),
         str(path),
         branch=branch.encode(),
+        depth=1,
         errstream=io.BytesIO(),
     )
 
 
 def fetch(server_id: int, repo_url: str = "", branch: str = "main", token: str = "") -> None:
+    if not repo_url:
+        raise FileNotFoundError(f"No repo URL for server {server_id}")
     path = _repo_path(server_id)
-    if not path.exists():
-        if not repo_url:
-            raise FileNotFoundError(f"Repo not cloned for server {server_id}")
-        clone(server_id, repo_url, branch, token)
-        return
-    remote_url = _auth_url(repo_url, token) if repo_url else None
-    with Repo(str(path)) as repo:
-        porcelain.fetch(repo, remote_location=remote_url, errstream=io.BytesIO())
-
-    # dulwich fetch sometimes updates refs without downloading objects — verify
-    if repo_url:
-        ref_key = f"refs/remotes/origin/{branch}".encode()
-        try:
-            with Repo(str(path)) as repo:
-                sha = repo.refs[ref_key].decode("ascii")
-                repo[bytes.fromhex(sha)]
-        except KeyError:
-            shutil.rmtree(str(path))
-            clone(server_id, repo_url, branch, token)
+    # porcelain.fetch() updates refs but fails to register pack objects in the
+    # next Repo context — always re-clone (depth=1 keeps it fast)
+    if path.exists():
+        shutil.rmtree(str(path))
+    clone(server_id, repo_url, branch, token)
 
 
 def get_remote_head(server_id: int, branch: str) -> str:
