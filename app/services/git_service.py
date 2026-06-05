@@ -1,4 +1,3 @@
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -10,33 +9,34 @@ def _repo_path(server_id: int) -> Path:
     return Path(settings.repos_path) / str(server_id)
 
 
-def _auth_url(repo_url: str) -> str:
-    """GitHub token을 URL에 삽입 (private repo 지원)."""
-    if settings.github_token and "github.com" in repo_url:
-        return repo_url.replace("https://", f"https://{settings.github_token}@")
+def _auth_url(repo_url: str, token: str) -> str:
+    """서버별 GitHub token을 URL에 삽입."""
+    if token and "github.com" in repo_url:
+        return repo_url.replace("https://", f"https://{token}@")
     return repo_url
 
 
-def clone(server_id: int, repo_url: str, branch: str) -> None:
+def clone(server_id: int, repo_url: str, branch: str, token: str = "") -> None:
     path = _repo_path(server_id)
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    # --depth 1 제거: 특정 커밋의 파일을 읽으려면 전체 히스토리 필요
     subprocess.run(
-        ["git", "clone", "--branch", branch, _auth_url(repo_url), str(path)],
+        ["git", "clone", "--branch", branch, _auth_url(repo_url, token), str(path)],
         check=True,
         capture_output=True,
     )
 
 
-def fetch(server_id: int) -> None:
+def fetch(server_id: int, repo_url: str = "", token: str = "") -> None:
     """원격 변경사항을 가져오되 working tree는 건드리지 않음."""
     path = _repo_path(server_id)
     if not path.exists():
         raise FileNotFoundError(f"Repo not cloned for server {server_id}")
+    # private repo는 fetch에도 인증 URL 필요
+    remote = _auth_url(repo_url, token) if repo_url and token else "--all"
     subprocess.run(
-        ["git", "-C", str(path), "fetch", "--quiet"],
+        ["git", "-C", str(path), "fetch", remote, "--quiet"],
         check=True,
         capture_output=True,
     )

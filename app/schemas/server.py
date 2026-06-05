@@ -6,6 +6,7 @@ class ServerCreate(BaseModel):
     hosts: list[str]
     git_repo_url: str
     git_branch: str = "main"
+    github_token: str = ""
 
 
 class ServerResponse(BaseModel):

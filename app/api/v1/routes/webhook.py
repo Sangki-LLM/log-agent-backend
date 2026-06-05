@@ -95,7 +95,9 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         source_files: dict[str, str] = {}
         if payload.stack_trace and server.current_commit:
             try:
-                await asyncio.to_thread(git_service.fetch, server.id)
+                await asyncio.to_thread(
+                    git_service.fetch, server.id, server.git_repo_url, server.github_token or ""
+                )
                 source_files = await asyncio.to_thread(
                     git_service.read_files_at_commit,
                     server.id,

@@ -14,8 +14,6 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./agent.db"
 
-    # GitHub
-    github_token: str = ""
     repos_path: str = "/app/repos"
 
     # Public URL of this backend (for Slack approve/reject links)

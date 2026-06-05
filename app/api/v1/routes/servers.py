@@ -15,7 +15,12 @@ router = APIRouter(prefix="/servers", tags=["servers"])
 
 @router.post("", response_model=ServerResponse, status_code=201)
 async def register_server(body: ServerCreate, db: AsyncSession = Depends(get_db)):
-    server = Server(name=body.name, git_repo_url=body.git_repo_url, git_branch=body.git_branch)
+    server = Server(
+        name=body.name,
+        git_repo_url=body.git_repo_url,
+        git_branch=body.git_branch,
+        github_token=body.github_token or None,
+    )
     db.add(server)
     await db.flush()
 
@@ -30,14 +35,14 @@ async def register_server(body: ServerCreate, db: AsyncSession = Depends(get_db)
     saved = result.scalar_one()
 
     # 백그라운드에서 git clone (실패해도 등록은 완료)
-    asyncio.create_task(_clone_repo(saved.id, saved.git_repo_url, saved.git_branch))
+    asyncio.create_task(_clone_repo(saved.id, saved.git_repo_url, saved.git_branch, saved.github_token or ""))
 
     return ServerResponse.from_orm_with_hosts(saved)
 
 
-async def _clone_repo(server_id: int, repo_url: str, branch: str) -> None:
+async def _clone_repo(server_id: int, repo_url: str, branch: str, token: str) -> None:
     try:
-        await asyncio.to_thread(git_service.clone, server_id, repo_url, branch)
+        await asyncio.to_thread(git_service.clone, server_id, repo_url, branch, token)
     except Exception:
         pass
 

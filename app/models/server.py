@@ -13,6 +13,7 @@ class Server(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     git_repo_url: Mapped[str] = mapped_column(String(500), nullable=False)
     git_branch: Mapped[str] = mapped_column(String(100), default="main")
+    github_token: Mapped[str] = mapped_column(String(200), nullable=True)
     current_commit: Mapped[str] = mapped_column(String(40), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
