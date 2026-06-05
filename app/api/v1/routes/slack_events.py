@@ -1,2 +1,58 @@
-# Slack Incoming Webhook 방식에서는 interactive callback이 없으므로
-# 이 파일은 향후 Slack App(Bot Token) 방식으로 업그레이드 시 사용.
+import json
+import logging
+
+from fastapi import APIRouter, Form, Request, Response
+from sqlalchemy import select
+
+from app.core.database import AsyncSessionLocal
+from app.models.server import AnalysisRecord, Server
+from app.services import slack_service
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/slack", tags=["slack"])
+
+
+@router.post("/actions")
+async def handle_slack_action(request: Request, payload: str = Form(...)):
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return Response(status_code=200)
+
+    action_list = data.get("actions", [])
+    if not action_list:
+        return Response(status_code=200)
+
+    action = action_list[0]
+    action_id = action.get("action_id", "")
+    record_id_str = action.get("value", "")
+
+    if not record_id_str or action_id not in ("approve_fix", "reject_fix"):
+        return Response(status_code=200)
+
+    try:
+        record_id = int(record_id_str)
+    except ValueError:
+        return Response(status_code=200)
+
+    async with AsyncSessionLocal() as db:
+        record = await db.get(AnalysisRecord, record_id)
+        if not record or record.status != "pending":
+            return Response(status_code=200)
+
+        server = await db.get(Server, record.server_id)
+        name = server.name if server else f"#{record.server_id}"
+
+        if action_id == "approve_fix":
+            record.status = "approved"
+            await db.commit()
+            await slack_service.send_result(f"✅ [{name}] 분석 결과 수락됨 (record #{record_id})")
+            logger.info("[slack] approved record=%s", record_id)
+        elif action_id == "reject_fix":
+            record.status = "rejected"
+            await db.commit()
+            await slack_service.send_result(f"❌ [{name}] 수정 제안 거절됨 (record #{record_id})")
+            logger.info("[slack] rejected record=%s", record_id)
+
+    return Response(status_code=200)
