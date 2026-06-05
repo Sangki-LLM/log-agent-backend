@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.server import AnalysisRecord, Server, ServerHost
-from app.schemas.server import DeployEventPayload, ErrorEventPayload
+from app.schemas.server import ErrorEventPayload
 from app.services import ollama_service, slack_service
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -31,25 +31,6 @@ def _build_raw_log(payload: ErrorEventPayload) -> str:
     if payload.stack_trace:
         parts.append(f"[스택 트레이스]\n{payload.stack_trace}")
     return "\n".join(parts)
-
-
-@router.post("/deploy")
-async def receive_deploy(
-    payload: DeployEventPayload,
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(Server)
-        .join(ServerHost, ServerHost.server_id == Server.id)
-        .where(ServerHost.host == payload.server_ip, Server.is_active == True)
-    )
-    server = result.scalar_one_or_none()
-    if not server:
-        return {"status": "ignored"}
-
-    server.current_commit = payload.git_commit
-    await db.commit()
-    return {"status": "ok", "commit": payload.git_commit}
 
 
 @router.post("/error")
@@ -91,18 +72,18 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         raw_log = _build_raw_log(payload)
         trigger_line = f"{payload.error_type}: {payload.message}"[:500]
 
-        # 에러 발생 시점 커밋의 소스 파일 읽기 (current_commit은 deploy 이벤트로 저장됨)
+        # fetch 후 원격 브랜치 HEAD 커밋 기준으로 소스 파일 읽기
         source_files: dict[str, str] = {}
-        if payload.stack_trace and server.current_commit:
+        if payload.stack_trace:
             try:
                 await asyncio.to_thread(
                     git_service.fetch, server.id, server.git_repo_url, server.github_token or ""
                 )
+                commit = await asyncio.to_thread(
+                    git_service.get_remote_head, server.id, server.git_branch
+                )
                 source_files = await asyncio.to_thread(
-                    git_service.read_files_at_commit,
-                    server.id,
-                    server.current_commit,
-                    payload.stack_trace,
+                    git_service.read_files_at_commit, server.id, commit, payload.stack_trace
                 )
             except Exception:
                 pass

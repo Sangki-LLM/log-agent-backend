@@ -33,13 +33,24 @@ def fetch(server_id: int, repo_url: str = "", token: str = "") -> None:
     path = _repo_path(server_id)
     if not path.exists():
         raise FileNotFoundError(f"Repo not cloned for server {server_id}")
-    # private repo는 fetch에도 인증 URL 필요
     remote = _auth_url(repo_url, token) if repo_url and token else "--all"
     subprocess.run(
         ["git", "-C", str(path), "fetch", remote, "--quiet"],
         check=True,
         capture_output=True,
     )
+
+
+def get_remote_head(server_id: int, branch: str) -> str:
+    """fetch 후 원격 브랜치의 최신 커밋 해시를 반환."""
+    path = _repo_path(server_id)
+    proc = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", f"origin/{branch}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout.strip()
 
 
 def read_files_at_commit(server_id: int, commit_hash: str, stack_trace: str) -> dict[str, str]:

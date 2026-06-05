@@ -43,6 +43,3 @@ class ErrorEventPayload(BaseModel):
     response_status: int = 500
 
 
-class DeployEventPayload(BaseModel):
-    server_ip: str
-    git_commit: str
