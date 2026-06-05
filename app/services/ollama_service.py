@@ -41,7 +41,6 @@ async def analyze_log(raw_log: str, source_files: dict[str, str] | None = None) 
                 "system": SYSTEM_PROMPT,
                 "prompt": prompt,
                 "stream": False,
-                "format": "json",
             },
         )
         response.raise_for_status()
