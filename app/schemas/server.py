@@ -3,12 +3,7 @@ from pydantic import BaseModel
 
 class ServerCreate(BaseModel):
     name: str
-    host: str
-    username: str = "ec2-user"
-    pem_key: str
-    project_path: str
-    log_path: str
-    git_branch: str = "main"
+    host: str  # IP 주소
 
 
 class ServerResponse(BaseModel):
@@ -17,16 +12,16 @@ class ServerResponse(BaseModel):
     id: int
     name: str
     host: str
-    username: str
-    project_path: str
-    log_path: str
-    git_branch: str
     is_active: bool
 
 
 class ErrorEventPayload(BaseModel):
-    server_id: int
-    trigger_line: str
+    server_name: str
+    server_ip: str
+    error_type: str = ""
+    message: str = ""
     stack_trace: str = ""
-    context_b64: str = ""
-    request_path: str = ""
+    request_method: str = ""
+    request_url: str = ""
+    request_body: str = ""
+    response_status: int = 500
