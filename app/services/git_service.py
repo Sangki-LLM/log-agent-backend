@@ -1,5 +1,6 @@
 import io
 import re
+import shutil
 from pathlib import Path
 
 from dulwich import porcelain
@@ -42,6 +43,17 @@ def fetch(server_id: int, repo_url: str = "", branch: str = "main", token: str =
     remote_url = _auth_url(repo_url, token) if repo_url else None
     with Repo(str(path)) as repo:
         porcelain.fetch(repo, remote_location=remote_url, errstream=io.BytesIO())
+
+    # dulwich fetch sometimes updates refs without downloading objects — verify
+    if repo_url:
+        ref_key = f"refs/remotes/origin/{branch}".encode()
+        try:
+            with Repo(str(path)) as repo:
+                sha = repo.refs[ref_key].decode("ascii")
+                repo[bytes.fromhex(sha)]
+        except KeyError:
+            shutil.rmtree(str(path))
+            clone(server_id, repo_url, branch, token)
 
 
 def get_remote_head(server_id: int, branch: str) -> str:
