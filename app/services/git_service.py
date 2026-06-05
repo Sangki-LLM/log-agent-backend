@@ -22,37 +22,43 @@ def clone(server_id: int, repo_url: str, branch: str) -> None:
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # --depth 1 제거: 특정 커밋의 파일을 읽으려면 전체 히스토리 필요
     subprocess.run(
-        ["git", "clone", "--branch", branch, "--depth", "1", _auth_url(repo_url), str(path)],
+        ["git", "clone", "--branch", branch, _auth_url(repo_url), str(path)],
         check=True,
         capture_output=True,
     )
 
 
-def pull(server_id: int) -> None:
+def fetch(server_id: int) -> None:
+    """원격 변경사항을 가져오되 working tree는 건드리지 않음."""
     path = _repo_path(server_id)
     if not path.exists():
         raise FileNotFoundError(f"Repo not cloned for server {server_id}")
     subprocess.run(
-        ["git", "-C", str(path), "pull", "--ff-only"],
+        ["git", "-C", str(path), "fetch", "--quiet"],
         check=True,
         capture_output=True,
     )
 
 
-def read_files_from_stacktrace(server_id: int, stack_trace: str) -> dict[str, str]:
-    """stack trace에서 파일 경로를 추출하고 클론된 repo에서 파일 내용을 읽어 반환."""
+def read_files_at_commit(server_id: int, commit_hash: str, stack_trace: str) -> dict[str, str]:
+    """특정 커밋 시점의 소스 파일을 git show로 읽어 반환."""
     paths = _extract_source_paths(stack_trace)
-    repo = _repo_path(server_id)
+    path = _repo_path(server_id)
     result: dict[str, str] = {}
 
     for rel_path in paths:
-        full_path = repo / rel_path
-        if full_path.exists():
-            try:
-                result[rel_path] = full_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                pass
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(path), "show", f"{commit_hash}:{rel_path}"],
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == 0:
+                result[rel_path] = proc.stdout[:2000]
+        except OSError:
+            pass
 
     return result
 

@@ -72,16 +72,19 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         raw_log = _build_raw_log(payload)
         trigger_line = f"{payload.error_type}: {payload.message}"[:500]
 
-        # 최신 코드 pull 후 stack trace에서 관련 소스 파일 읽기
+        # 원격 fetch 후 에러 발생 시점 커밋의 소스 파일 읽기
         source_files: dict[str, str] = {}
-        try:
-            await asyncio.to_thread(git_service.pull, server.id)
-            if payload.stack_trace:
+        if payload.stack_trace and payload.git_commit:
+            try:
+                await asyncio.to_thread(git_service.fetch, server.id)
                 source_files = await asyncio.to_thread(
-                    git_service.read_files_from_stacktrace, server.id, payload.stack_trace
+                    git_service.read_files_at_commit,
+                    server.id,
+                    payload.git_commit,
+                    payload.stack_trace,
                 )
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         suggestion = await ollama_service.analyze_log(raw_log, source_files)
 
