@@ -11,11 +11,21 @@ class Server(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    host: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    hosts: Mapped[list["ServerHost"]] = relationship(back_populates="server", cascade="all, delete-orphan")
     records: Mapped[list["AnalysisRecord"]] = relationship(back_populates="server")
+
+
+class ServerHost(Base):
+    __tablename__ = "server_hosts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id"), nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+
+    server: Mapped["Server"] = relationship(back_populates="hosts")
 
 
 class AnalysisRecord(Base):
