@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./agent.db"
 
     repos_path: str = "/app/repos"
+    vector_db_path: str = "/app/vectordb"
+
+    # Ollama embedding model for RAG
+    ollama_embed_model: str = "nomic-embed-text"
 
     # Public URL of this backend (for Slack approve/reject links)
     public_url: str = "http://localhost:8000"

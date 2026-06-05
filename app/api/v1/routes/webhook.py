@@ -72,7 +72,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
     import asyncio
 
     from app.core.database import AsyncSessionLocal
-    from app.services import git_service
+    from app.services import git_service, rag_service
 
     print(f"[pipeline] start — server={server.name} error={payload.error_type}", flush=True)
     logger.info("[pipeline] start — server=%s error=%s", server.name, payload.error_type)
@@ -81,24 +81,33 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         raw_log = _build_raw_log(payload)
         trigger_line = f"{payload.error_type}: {payload.message}"[:500]
 
-        # fetch 후 원격 브랜치 HEAD 커밋 기준으로 소스 파일 읽기
         source_files: dict[str, str] = {}
-        if payload.stack_trace:
-            try:
-                logger.info("[pipeline] git fetch — server_id=%s repo=%s", server.id, server.git_repo_url)
-                await asyncio.to_thread(
-                    git_service.fetch, server.id, server.git_repo_url, server.git_branch, server.github_token or ""
-                )
-                commit = await asyncio.to_thread(
-                    git_service.get_remote_head, server.id, server.git_branch
-                )
-                logger.info("[pipeline] remote HEAD=%s", commit)
-                source_files = await asyncio.to_thread(
-                    git_service.read_files_at_commit, server.id, commit, payload.stack_trace
-                )
-                logger.info("[pipeline] source files found=%s", list(source_files.keys()))
-            except Exception as e:
-                logger.warning("[pipeline] git step failed: %s", e, exc_info=True)
+        try:
+            logger.info("[pipeline] git fetch — server_id=%s repo=%s", server.id, server.git_repo_url)
+            await asyncio.to_thread(
+                git_service.fetch, server.id, server.git_repo_url, server.git_branch, server.github_token or ""
+            )
+            commit = await asyncio.to_thread(git_service.get_remote_head, server.id, server.git_branch)
+            logger.info("[pipeline] remote HEAD=%s", commit)
+
+            # RAG: commit이 바뀐 경우 전체 소스 재인덱싱
+            if not rag_service.is_indexed(server.id, commit):
+                logger.info("[pipeline] RAG indexing start")
+                chunks = await asyncio.to_thread(git_service.list_all_files_at_commit, server.id, commit)
+                await rag_service.index_repo(server.id, commit, chunks)
+
+            # RAG 검색 + 스택 트레이스 파일 병합
+            query = f"{payload.error_type}: {payload.message}\n{payload.stack_trace[:500]}"
+            rag_paths = await rag_service.search_relevant_files(server.id, query, n_results=5)
+            stack_paths = list(git_service.read_files_at_commit(server.id, commit, payload.stack_trace or "").keys())
+
+            all_paths = list(dict.fromkeys(rag_paths + stack_paths))  # 순서 유지 중복 제거
+            logger.info("[pipeline] RAG paths=%s stack paths=%s", rag_paths, stack_paths)
+
+            source_files = await asyncio.to_thread(git_service.read_files_by_paths, server.id, commit, all_paths)
+            logger.info("[pipeline] source files=%s", list(source_files.keys()))
+        except Exception as e:
+            logger.warning("[pipeline] git/rag step failed: %s", e, exc_info=True)
 
         logger.info("[pipeline] calling ollama — files=%d", len(source_files))
         try:
