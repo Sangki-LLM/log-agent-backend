@@ -7,3 +7,4 @@ agent.db
 *.db-journal
 dist/
 .ruff_cache/
+Jenkinsfile
