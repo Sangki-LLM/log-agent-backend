@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -12,15 +13,13 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a senior DevSecOps engineer analyzing server error logs.
 
-Follow this strategy to gather context before analyzing:
-1. If the error log contains a Java/Kotlin stack trace, extract the fully-qualified class name
-   and call read_file with the path (e.g. "at com.example.foo.BarService" → read_file("src/main/java/com/example/foo/BarService.java")).
-   Also try src/test/java/ if src/main/java/ is not found.
-2. After reading the direct source, use search_files to find related config, service, or dependency files
-   that may be the root cause (e.g. @Configuration, @Bean, injected services).
-3. Once you have enough context (or after a few attempts), stop calling tools and respond.
+The user message already includes the source file(s) directly involved in the error (extracted from the stack trace).
+Use search_files to find additional related files that may be the ROOT CAUSE — such as:
+- @Configuration or @Bean definitions
+- injected @Service or @Component dependencies
+- application properties or environment config
 
-Respond ONLY in this JSON structure (no markdown, no code fences):
+Once you have enough context, respond ONLY in this JSON structure (no markdown, no code fences):
 {
   "error_cause": "<brief root cause in Korean>",
   "bottleneck": "<suspected bottleneck or affected component>",
@@ -33,39 +32,22 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_files",
-            "description": "에러와 관련된 소스 파일 경로를 ChromaDB에서 의미 기반으로 검색합니다.",
+            "description": "에러의 근본 원인과 관련된 소스 파일을 검색하고 내용을 반환합니다.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "검색할 키워드 (클래스명, 메서드명, 에러 원인 등)",
+                        "description": "검색할 키워드 (클래스명, Bean 이름, 설정 키 등)",
                     }
                 },
                 "required": ["query"],
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "소스 파일의 내용을 읽습니다.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "읽을 파일 경로 (예: src/main/java/com/example/Foo.java)",
-                    }
-                },
-                "required": ["path"],
-            },
-        },
-    },
 ]
 
-_MAX_TOOL_ITERATIONS = 8
+_MAX_TOOL_ITERATIONS = 5
 
 
 def _strip_code_fence(text: str) -> str:
@@ -84,48 +66,72 @@ def _parse_arguments(raw) -> dict:
         return {}
 
 
-async def _execute_tool(name: str, args: dict, server_id: int, repo_path: Path) -> str:
-    from app.services import rag_service
+def _read_stack_trace_files(server_id: int, stack_trace: str) -> dict[str, str]:
+    from app.services.git_service import _extract_source_paths, _repo_path
 
-    if name == "search_files":
-        query = args.get("query", "")
-        paths = await rag_service.search_relevant_files(server_id, query, n_results=5)
-        logger.info("[agent] search_files query=%r → %s", query, paths)
-        return json.dumps(paths, ensure_ascii=False)
+    if not stack_trace:
+        return {}
 
-    if name == "read_file":
-        path = args.get("path", "")
+    repo_path = _repo_path(server_id)
+    paths = _extract_source_paths(stack_trace)
+    result: dict[str, str] = {}
+    for path in paths:
         try:
             content = (repo_path / path).read_text(encoding="utf-8", errors="replace")
-            logger.info("[agent] read_file path=%s (%d chars)", path, len(content))
-            return content[:3000]
+            result[path] = content[:3000]
         except FileNotFoundError:
-            logger.warning("[agent] read_file not found: %s", path)
-            return f"파일을 찾을 수 없습니다: {path}"
-
-    return f"알 수 없는 도구: {name}"
+            pass
+    return result
 
 
-async def analyze_log(server_id: int, raw_log: str) -> str:
+async def _execute_search(query: str, server_id: int, repo_path: Path) -> str:
+    from app.services import rag_service
+
+    paths = await rag_service.search_relevant_files(server_id, query, n_results=3)
+    logger.info("[agent] search_files query=%r → %s", query, paths)
+
+    results: dict[str, str] = {}
+    for path in paths:
+        try:
+            content = (repo_path / path).read_text(encoding="utf-8", errors="replace")
+            results[path] = content[:2000]
+        except FileNotFoundError:
+            pass
+
+    return json.dumps(results, ensure_ascii=False)
+
+
+def _build_initial_user_message(raw_log: str, stack_files: dict[str, str]) -> str:
+    parts = [f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```"]
+    if stack_files:
+        parts.append("\n\n에러가 발생한 소스 파일:")
+        for path, content in stack_files.items():
+            parts.append(f"\n### {path}\n```java\n{content}\n```")
+    return "".join(parts)
+
+
+async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> str:
     from app.services.git_service import _repo_path
 
     repo_path = _repo_path(server_id)
 
+    stack_files = await asyncio.to_thread(_read_stack_trace_files, server_id, stack_trace)
+    if stack_files:
+        logger.info("[agent] pre-loaded stack trace files: %s", list(stack_files.keys()))
+    else:
+        logger.info("[agent] no stack trace files found, LLM will search")
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```",
-        },
+        {"role": "user", "content": _build_initial_user_message(raw_log, stack_files)},
     ]
 
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)
     ) as client:
         for iteration in range(_MAX_TOOL_ITERATIONS):
-            # 마지막 2번 남았으면 도구 없이 강제 응답 유도
-            tools_payload = TOOLS if iteration < _MAX_TOOL_ITERATIONS - 2 else []
-            if not tools_payload and iteration > 0:
+            tools_payload = TOOLS if iteration < _MAX_TOOL_ITERATIONS - 1 else []
+            if not tools_payload:
                 messages.append({
                     "role": "user",
                     "content": "지금까지 수집한 정보를 바탕으로 JSON 형식으로 분석 결과를 응답해줘.",
@@ -155,7 +161,10 @@ async def analyze_log(server_id: int, raw_log: str) -> str:
                 fn = call.get("function", {})
                 name = fn.get("name", "")
                 args = _parse_arguments(fn.get("arguments", {}))
-                result = await _execute_tool(name, args, server_id, repo_path)
+                if name == "search_files":
+                    result = await _execute_search(args.get("query", ""), server_id, repo_path)
+                else:
+                    result = f"알 수 없는 도구: {name}"
                 messages.append({"role": "tool", "content": result})
 
     logger.warning("[agent] max iterations reached without final response")

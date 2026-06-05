@@ -99,7 +99,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
 
         logger.info("[pipeline] calling ollama (agentic)")
         try:
-            suggestion = await ollama_service.analyze_log(server.id, raw_log)
+            suggestion = await ollama_service.analyze_log(server.id, raw_log, payload.stack_trace)
             logger.info("[pipeline] ollama response length=%d", len(suggestion or ""))
         except Exception as e:
             logger.error("[pipeline] ollama failed: %s", e, exc_info=True)
