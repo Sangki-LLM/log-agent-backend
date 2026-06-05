@@ -36,7 +36,7 @@ async def analyze_log(raw_log: str, source_files: dict[str, str] | None = None) 
 
     prompt = "".join(parts)
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=5.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)) as client:
         response = await client.post(
             f"{settings.ollama_host}/api/generate",
             json={
@@ -59,7 +59,7 @@ async def analyze_log(raw_log: str, source_files: dict[str, str] | None = None) 
 async def stream_analysis(raw_log: str) -> AsyncGenerator[str, None]:
     prompt = f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=5.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)) as client:
         async with client.stream(
             "POST",
             f"{settings.ollama_host}/api/generate",
