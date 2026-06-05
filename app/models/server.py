@@ -11,12 +11,7 @@ class Server(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    host: Mapped[str] = mapped_column(String(255), nullable=False)
-    username: Mapped[str] = mapped_column(String(100), default="ec2-user")
-    pem_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    project_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    log_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    git_branch: Mapped[str] = mapped_column(String(100), default="main")
+    host: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -31,7 +26,7 @@ class AnalysisRecord(Base):
     trigger_line: Mapped[str] = mapped_column(Text, nullable=False)
     raw_log: Mapped[str] = mapped_column(Text, nullable=False)
     llm_suggestion: Mapped[str] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/approved/rejected/applied
+    status: Mapped[str] = mapped_column(String(20), default="pending")
     slack_ts: Mapped[str] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
