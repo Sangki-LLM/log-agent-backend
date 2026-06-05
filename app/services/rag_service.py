@@ -9,12 +9,13 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_STATE_FILE = Path(settings.vector_db_path) / "index_state.json"
+# 인덱스 상태는 repos 볼륨에 저장 (컨테이너 재시작 후에도 유지)
+_STATE_FILE = Path(settings.repos_path) / "index_state.json"
 _BATCH_SIZE = 50
 
 
 def _collection(server_id: int):
-    client = chromadb.PersistentClient(path=settings.vector_db_path)
+    client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
     return client.get_or_create_collection(
         name=f"server_{server_id}",
         metadata={"hnsw:space": "cosine"},
@@ -85,7 +86,7 @@ async def search_relevant_files(server_id: int, query: str, n_results: int = 5) 
         query_embeddings = await _embed([query[:2000]])
         results = col.query(
             query_embeddings=query_embeddings,
-            n_results=min(n_results * 3, count),  # 청크 중복 고려해 넉넉하게
+            n_results=min(n_results * 3, count),
         )
 
         seen: set[str] = set()

@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./agent.db"
 
     repos_path: str = "/app/repos"
-    vector_db_path: str = "/app/vectordb"
+
+    # ChromaDB (서버 모드)
+    chroma_host: str = "localhost"
+    chroma_port: int = 8001
 
     # Ollama embedding model for RAG
     ollama_embed_model: str = "nomic-embed-text"
