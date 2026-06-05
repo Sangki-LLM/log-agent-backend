@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import AsyncGenerator
 
 import httpx
@@ -6,13 +7,20 @@ import httpx
 from app.core.config import settings
 
 SYSTEM_PROMPT = """You are a senior DevSecOps engineer analyzing server error logs.
-When given a log excerpt, respond ONLY in this JSON structure:
+When given a log excerpt, respond ONLY in this JSON structure (no markdown, no code fences):
 {
   "error_cause": "<brief root cause in Korean>",
   "bottleneck": "<suspected bottleneck or affected component>",
   "suggested_fix": "<corrected code block in markdown>",
   "commit_message": "<concise git commit message starting with fix:>"
 }"""
+
+
+def _strip_code_fence(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
 
 async def analyze_log(raw_log: str, source_files: dict[str, str] | None = None) -> str:
@@ -33,10 +41,12 @@ async def analyze_log(raw_log: str, source_files: dict[str, str] | None = None) 
                 "system": SYSTEM_PROMPT,
                 "prompt": prompt,
                 "stream": False,
+                "format": "json",
             },
         )
         response.raise_for_status()
-        return response.json().get("response", "")
+        raw = response.json().get("response", "")
+        return _strip_code_fence(raw)
 
 
 async def stream_analysis(raw_log: str) -> AsyncGenerator[str, None]:
