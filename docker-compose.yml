@@ -1,0 +1,37 @@
+services:
+  log-agent-backend:
+    image: log-agent-backend:${IMAGE_TAG:-latest}
+    container_name: log-agent-backend
+    restart: always
+    ports:
+      - "6001:8000"
+    volumes:
+      - /var/lib/jenkins/repos:/app/repos
+    environment:
+      TZ: Asia/Seoul
+      OLLAMA_HOST: ${OLLAMA_HOST}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:12b}
+      DATABASE_URL: ${DATABASE_URL}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+      REPOS_PATH: /app/repos
+      PUBLIC_URL: ${PUBLIC_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+    depends_on:
+      chromadb:
+        condition: service_healthy
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    restart: always
+    ports:
+      - "8001:8000"
+    volumes:
+      - /var/lib/jenkins/chromadb:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
