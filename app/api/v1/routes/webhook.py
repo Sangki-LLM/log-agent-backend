@@ -101,7 +101,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
             rag_paths = await rag_service.search_relevant_files(server.id, query, n_results=5)
             stack_paths = list(git_service.read_files_at_commit(server.id, commit, payload.stack_trace or "").keys())
 
-            all_paths = list(dict.fromkeys(rag_paths + stack_paths))  # 순서 유지 중복 제거
+            all_paths = list(dict.fromkeys(stack_paths + rag_paths))  # stack trace 직접 추출 파일 우선
             logger.info("[pipeline] RAG paths=%s stack paths=%s", rag_paths, stack_paths)
 
             source_files = await asyncio.to_thread(git_service.read_files_by_paths, server.id, commit, all_paths)

@@ -120,7 +120,9 @@ def _extract_source_paths(stack_trace: str) -> list[str]:
         filename = match.group(2)
         package_path = package.split("$")[0].rsplit(".", 1)[0].replace(".", "/")
         paths.append(f"src/main/java/{package_path}/{filename}")
+        paths.append(f"src/test/java/{package_path}/{filename}")
         paths.append(f"src/main/kotlin/{package_path}/{filename}")
+        paths.append(f"src/test/kotlin/{package_path}/{filename}")
 
     python_pattern = re.compile(r'File "([^"]+\.py)", line \d+')
     for match in python_pattern.finditer(stack_trace):
