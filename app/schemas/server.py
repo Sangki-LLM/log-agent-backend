@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 class ServerCreate(BaseModel):
     name: str
-    host: str  # IP 주소
+    hosts: list[str]  # IP 주소 목록
 
 
 class ServerResponse(BaseModel):
@@ -11,8 +11,17 @@ class ServerResponse(BaseModel):
 
     id: int
     name: str
-    host: str
+    hosts: list[str]
     is_active: bool
+
+    @classmethod
+    def from_orm_with_hosts(cls, server) -> "ServerResponse":
+        return cls(
+            id=server.id,
+            name=server.name,
+            hosts=[h.host for h in server.hosts],
+            is_active=server.is_active,
+        )
 
 
 class ErrorEventPayload(BaseModel):
