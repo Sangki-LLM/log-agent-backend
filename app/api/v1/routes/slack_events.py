@@ -1,8 +1,8 @@
 import json
 import logging
+from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Form, Request, Response
-from sqlalchemy import select
+from fastapi import APIRouter, Request, Response
 
 from app.core.database import AsyncSessionLocal
 from app.models.server import AnalysisRecord, Server
@@ -14,9 +14,12 @@ router = APIRouter(prefix="/slack", tags=["slack"])
 
 
 @router.post("/actions")
-async def handle_slack_action(request: Request, payload: str = Form(...)):
+async def handle_slack_action(request: Request):
+    body = await request.body()
     try:
-        data = json.loads(payload)
+        parsed = parse_qs(body.decode())
+        payload_str = parsed.get("payload", [""])[0]
+        data = json.loads(payload_str)
     except Exception:
         return Response(status_code=200)
 
