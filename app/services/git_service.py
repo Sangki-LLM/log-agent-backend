@@ -4,7 +4,6 @@ import shutil
 from pathlib import Path
 
 from dulwich import porcelain
-from dulwich.object_store import tree_lookup_path
 from dulwich.repo import Repo
 
 from app.core.config import settings
@@ -38,8 +37,6 @@ def fetch(server_id: int, repo_url: str = "", branch: str = "main", token: str =
     if not repo_url:
         raise FileNotFoundError(f"No repo URL for server {server_id}")
     path = _repo_path(server_id)
-    # porcelain.fetch() updates refs but fails to register pack objects in the
-    # next Repo context — always re-clone (depth=1 keeps it fast)
     if path.exists():
         shutil.rmtree(str(path))
     clone(server_id, repo_url, branch, token)
@@ -48,86 +45,68 @@ def fetch(server_id: int, repo_url: str = "", branch: str = "main", token: str =
 def get_remote_head(server_id: int, branch: str) -> str:
     path = _repo_path(server_id)
     with Repo(str(path)) as repo:
+        # try remote tracking ref first, fall back to local HEAD
         ref_key = f"refs/remotes/origin/{branch}".encode()
-        sha = repo.refs[ref_key]
-        # dulwich refs return hex SHA as ascii bytes, not binary
+        try:
+            sha = repo.refs[ref_key]
+            return sha.decode("ascii") if isinstance(sha, bytes) else sha
+        except KeyError:
+            pass
+        sha = repo.head()
         return sha.decode("ascii") if isinstance(sha, bytes) else sha
 
 
 def list_all_files_at_commit(server_id: int, commit_hash: str, chunk_size: int = 1500) -> list[tuple[str, str]]:
-    """커밋 시점 전체 소스 파일을 청크 리스트로 반환 (경로, 내용)."""
+    """Working tree를 직접 읽어 소스 파일 청크 목록 반환."""
     SOURCE_EXTENSIONS = {".java", ".kt", ".py", ".ts", ".tsx", ".js", ".go"}
-    path = _repo_path(server_id)
+    base = _repo_path(server_id)
     chunks: list[tuple[str, str]] = []
 
-    with Repo(str(path)) as repo:
-        commit = repo[bytes.fromhex(commit_hash)]
-        _walk_tree(repo, commit.tree, "", chunks, SOURCE_EXTENSIONS, chunk_size)
+    for file_path in sorted(base.rglob("*")):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in SOURCE_EXTENSIONS:
+            continue
+        # .git 디렉토리 제외
+        if ".git" in file_path.parts:
+            continue
+        rel = str(file_path.relative_to(base)).replace("\\", "/")
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+            for i in range(0, len(content), chunk_size):
+                chunks.append((rel, content[i:i + chunk_size]))
+        except Exception:
+            pass
 
     return chunks
 
 
-def _walk_tree(repo, tree_sha: bytes, prefix: str, chunks: list, extensions: set, chunk_size: int) -> None:
-    from dulwich.objects import Blob, Tree
-
-    tree = repo[tree_sha]
-    for item in tree.items():
-        name = item.path.decode("utf-8", errors="replace")
-        full_path = f"{prefix}/{name}" if prefix else name
-        obj = repo[item.sha]
-
-        if isinstance(obj, Tree):
-            _walk_tree(repo, item.sha, full_path, chunks, extensions, chunk_size)
-        elif isinstance(obj, Blob):
-            if Path(full_path).suffix.lower() in extensions:
-                try:
-                    content = obj.data.decode("utf-8", errors="replace")
-                    for i in range(0, len(content), chunk_size):
-                        chunks.append((full_path, content[i:i + chunk_size]))
-                except Exception:
-                    pass
-
-
 def read_files_by_paths(server_id: int, commit_hash: str, paths: list[str]) -> dict[str, str]:
-    """특정 경로 목록의 파일을 커밋 시점 기준으로 읽어 반환."""
-    path = _repo_path(server_id)
+    """Working tree에서 경로 목록의 파일 내용 반환."""
+    base = _repo_path(server_id)
     result: dict[str, str] = {}
 
-    with Repo(str(path)) as repo:
-        commit = repo[bytes.fromhex(commit_hash)]
-        for rel_path in paths:
-            try:
-                _mode, blob_sha = tree_lookup_path(
-                    repo.object_store.__getitem__,
-                    commit.tree,
-                    rel_path.encode(),
-                )
-                content = repo[blob_sha].data.decode("utf-8", errors="replace")
-                result[rel_path] = content[:3000]
-            except Exception:
-                pass
+    for rel_path in paths:
+        try:
+            content = (base / rel_path).read_text(encoding="utf-8", errors="replace")
+            result[rel_path] = content[:3000]
+        except Exception:
+            pass
 
     return result
 
 
 def read_files_at_commit(server_id: int, commit_hash: str, stack_trace: str) -> dict[str, str]:
     paths = _extract_source_paths(stack_trace)
-    path = _repo_path(server_id)
+    base = _repo_path(server_id)
     result: dict[str, str] = {}
 
-    with Repo(str(path)) as repo:
-        commit = repo[bytes.fromhex(commit_hash)]
-        for rel_path in paths:
-            try:
-                _mode, blob_sha = tree_lookup_path(
-                    repo.object_store.__getitem__,
-                    commit.tree,
-                    rel_path.encode(),
-                )
-                content = repo[blob_sha].data.decode("utf-8", errors="replace")
-                result[rel_path] = content[:2000]
-            except Exception:
-                pass
+    for rel_path in paths:
+        try:
+            content = (base / rel_path).read_text(encoding="utf-8", errors="replace")
+            result[rel_path] = content[:2000]
+        except Exception:
+            pass
 
     return result
 
