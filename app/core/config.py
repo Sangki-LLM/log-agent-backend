@@ -14,9 +14,6 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./agent.db"
 
-    # Security
-    pem_encryption_key: str = ""
-
     # Public URL of this backend (for Slack approve/reject links)
     public_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:5173"

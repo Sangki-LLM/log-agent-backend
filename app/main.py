@@ -23,7 +23,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://log-agent.sangkihan.co.kr", "http://localhost:6000"],
+    allow_origins=["https://log-agent.sangkihan.co.kr", "http://localhost:6000", "http://localhost:6001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
