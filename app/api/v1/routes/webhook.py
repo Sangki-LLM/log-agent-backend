@@ -63,13 +63,27 @@ async def receive_error(
 
 
 async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None:
+    import asyncio
+
     from app.core.database import AsyncSessionLocal
+    from app.services import git_service
 
     async with AsyncSessionLocal() as db:
         raw_log = _build_raw_log(payload)
         trigger_line = f"{payload.error_type}: {payload.message}"[:500]
 
-        suggestion = await ollama_service.analyze_log(raw_log)
+        # 최신 코드 pull 후 stack trace에서 관련 소스 파일 읽기
+        source_files: dict[str, str] = {}
+        try:
+            await asyncio.to_thread(git_service.pull, server.id)
+            if payload.stack_trace:
+                source_files = await asyncio.to_thread(
+                    git_service.read_files_from_stacktrace, server.id, payload.stack_trace
+                )
+        except Exception:
+            pass
+
+        suggestion = await ollama_service.analyze_log(raw_log, source_files)
 
         record = AnalysisRecord(
             server_id=server.id,

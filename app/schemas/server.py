@@ -3,7 +3,9 @@ from pydantic import BaseModel
 
 class ServerCreate(BaseModel):
     name: str
-    hosts: list[str]  # IP 주소 목록
+    hosts: list[str]
+    git_repo_url: str
+    git_branch: str = "main"
 
 
 class ServerResponse(BaseModel):
@@ -12,6 +14,8 @@ class ServerResponse(BaseModel):
     id: int
     name: str
     hosts: list[str]
+    git_repo_url: str
+    git_branch: str
     is_active: bool
 
     @classmethod
@@ -20,6 +24,8 @@ class ServerResponse(BaseModel):
             id=server.id,
             name=server.name,
             hosts=[h.host for h in server.hosts],
+            git_repo_url=server.git_repo_url,
+            git_branch=server.git_branch,
             is_active=server.is_active,
         )
 

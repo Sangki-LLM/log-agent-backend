@@ -15,8 +15,15 @@ When given a log excerpt, respond ONLY in this JSON structure:
 }"""
 
 
-async def analyze_log(raw_log: str) -> str:
-    prompt = f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```"
+async def analyze_log(raw_log: str, source_files: dict[str, str] | None = None) -> str:
+    parts = [f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```"]
+
+    if source_files:
+        parts.append("\n\n관련 소스 파일:")
+        for path, content in source_files.items():
+            parts.append(f"\n### {path}\n```\n{content[:2000]}\n```")
+
+    prompt = "".join(parts)
 
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(
