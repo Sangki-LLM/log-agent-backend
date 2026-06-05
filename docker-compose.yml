@@ -20,7 +20,7 @@ services:
       CHROMA_PORT: 8000
     depends_on:
       chromadb:
-        condition: service_healthy
+        condition: service_started
 
   chromadb:
     image: chromadb/chroma:latest
