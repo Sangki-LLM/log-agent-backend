@@ -1,10 +1,13 @@
 import json
+import logging
 import re
 from collections.abc import AsyncGenerator
 
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a senior DevSecOps engineer analyzing server error logs.
 When given a log excerpt, respond ONLY in this JSON structure (no markdown, no code fences):
@@ -41,10 +44,15 @@ async def analyze_log(raw_log: str, source_files: dict[str, str] | None = None) 
                 "system": SYSTEM_PROMPT,
                 "prompt": prompt,
                 "stream": False,
+                "options": {"num_ctx": 16384},
             },
         )
         response.raise_for_status()
-        raw = response.json().get("response", "")
+        data = response.json()
+        raw = data.get("response", "")
+        if not raw:
+            logger.warning("[ollama] empty response — done_reason=%s prompt_tokens=%s",
+                           data.get("done_reason"), data.get("prompt_eval_count"))
         return _strip_code_fence(raw)
 
 
