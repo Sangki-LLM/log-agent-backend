@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+agent.db
+*.db-journal
+dist/
+.ruff_cache/
