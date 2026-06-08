@@ -61,6 +61,26 @@ TOOLS = [
 
 _MAX_TOOL_ITERATIONS = 5
 
+_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "error_cause":    {"type": "string"},
+        "bottleneck":     {"type": "string"},
+        "suggested_fix":  {"type": "string"},
+        "commit_message": {"type": "string"},
+        "file_patch": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string"},
+                "before":    {"type": "string"},
+                "after":     {"type": "string"},
+            },
+            "required": ["file_path", "before", "after"],
+        },
+    },
+    "required": ["error_cause", "bottleneck", "suggested_fix", "commit_message", "file_patch"],
+}
+
 
 def _strip_code_fence(text: str) -> str:
     text = text.strip()
@@ -173,15 +193,19 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
                     "content": "지금까지 수집한 정보를 바탕으로 JSON 형식으로 분석 결과를 응답해줘.",
                 })
 
+            request_body: dict = {
+                "model": settings.ollama_model,
+                "messages": messages,
+                "tools": tools_payload,
+                "stream": False,
+                "think": False,
+            }
+            if not tools_payload:
+                request_body["format"] = _ANALYSIS_SCHEMA
+
             response = await client.post(
                 f"{settings.ollama_host}/api/chat",
-                json={
-                    "model": settings.ollama_model,
-                    "messages": messages,
-                    "tools": tools_payload,
-                    "stream": False,
-                    "think": False,
-                },
+                json=request_body,
             )
             response.raise_for_status()
             data = response.json()
@@ -233,6 +257,7 @@ async def _fallback_analyze(raw_log: str) -> str:
                 ],
                 "stream": False,
                 "think": False,
+                "format": _ANALYSIS_SCHEMA,
             },
         )
         response.raise_for_status()
