@@ -30,9 +30,6 @@ def _build_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
     else:
         fix_code = (fix_explanation or record.llm_suggestion or "")[:1200]
 
-    approve_url = f"{settings.public_url}/api/v1/analysis/approve/{record.id}"
-    reject_url = f"{settings.public_url}/api/v1/analysis/reject/{record.id}"
-
     return [
         {
             "type": "header",
@@ -67,13 +64,15 @@ def _build_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
                     "type": "button",
                     "text": {"type": "plain_text", "text": "✅ 수락 & Push"},
                     "style": "primary",
-                    "url": approve_url,
+                    "action_id": "approve_fix",
+                    "value": str(record.id),
                 },
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "❌ 거절"},
                     "style": "danger",
-                    "url": reject_url,
+                    "action_id": "reject_fix",
+                    "value": str(record.id),
                 },
             ],
         },
