@@ -13,4 +13,6 @@ class AnalysisRecordResponse(BaseModel):
     llm_suggestion: str | None
     status: str
     slack_ts: str | None
+    slack_channel: str | None
+    github_pr_url: str | None
     created_at: datetime

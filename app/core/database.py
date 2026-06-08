@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -28,3 +29,17 @@ async def get_db() -> AsyncSession:
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate(conn)
+
+
+async def _migrate(conn) -> None:
+    """기존 테이블에 새 컬럼을 추가합니다 (이미 존재하면 무시)."""
+    new_columns = [
+        "ALTER TABLE analysis_records ADD COLUMN slack_channel VARCHAR(50)",
+        "ALTER TABLE analysis_records ADD COLUMN github_pr_url VARCHAR(500)",
+    ]
+    for stmt in new_columns:
+        try:
+            await conn.execute(text(stmt))
+        except Exception:
+            pass

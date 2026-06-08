@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import select
@@ -7,7 +9,9 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.server import AnalysisRecord, Server
 from app.schemas.analysis import AnalysisRecordResponse
-from app.services import ollama_service, slack_service
+from app.services import github_service, ollama_service, slack_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -31,15 +35,43 @@ async def approve_fix(record_id: int, db: AsyncSession = Depends(get_db)):
     if not record:
         return _html_page("❌ 오류", "해당 분석 레코드를 찾을 수 없습니다.", error=True)
     if record.status != "pending":
-        return _html_page("⚠️ 이미 처리됨", f"현재 상태: <b>{record.status}</b>")
+        pr_link = f'<br><a href="{record.github_pr_url}">GitHub PR 보기 →</a>' if record.github_pr_url else ""
+        return _html_page("⚠️ 이미 처리됨", f"현재 상태: <b>{record.status}</b>{pr_link}")
 
     server = await db.get(Server, record.server_id)
     record.status = "approved"
     await db.commit()
 
+    # GitHub PR 생성 + 파일 커밋
+    pr_url = ""
+    if server:
+        pr_url = await github_service.create_fix_pr(server, record)
+        if pr_url:
+            record.github_pr_url = pr_url
+            await db.commit()
+        logger.info("[approve] GitHub PR: %s", pr_url or "skipped")
+
+    # 원본 Slack 메시지 업데이트 (버튼 → 승인 상태)
+    if server:
+        await slack_service.update_message_status(
+            record.slack_ts or "",
+            record.slack_channel or "",
+            server,
+            record,
+            pr_url,
+            approved=True,
+        )
+
     name = server.name if server else f"#{record.server_id}"
-    await slack_service.send_result(f"✅ [{name}] 분석 결과 수락됨 (record #{record_id})")
-    return _html_page("✅ 수락됨", "분석 결과가 수락되었습니다.")
+    result_text = f"✅ [{name}] 분석 결과 수락됨 (record #{record_id})"
+    if pr_url:
+        result_text += f" — {pr_url}"
+    await slack_service.send_result(result_text)
+
+    return _html_page(
+        "✅ 수락됨",
+        "분석 결과가 수락되었습니다." + (f'<br><br><a href="{pr_url}">GitHub PR 보기 →</a>' if pr_url else ""),
+    )
 
 
 @router.get("/reject/{record_id}", response_class=HTMLResponse)
@@ -53,6 +85,17 @@ async def reject_fix(record_id: int, db: AsyncSession = Depends(get_db)):
     server = await db.get(Server, record.server_id)
     record.status = "rejected"
     await db.commit()
+
+    # 원본 Slack 메시지 업데이트 (버튼 → 거절 상태)
+    if server:
+        await slack_service.update_message_status(
+            record.slack_ts or "",
+            record.slack_channel or "",
+            server,
+            record,
+            "",
+            approved=False,
+        )
 
     name = server.name if server else f"#{record.server_id}"
     await slack_service.send_result(f"❌ [{name}] 수정 제안 거절됨 (record #{record_id})")
