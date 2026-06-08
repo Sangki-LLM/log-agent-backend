@@ -75,21 +75,30 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
     logger.info("[rag] index complete server=%s chunks=%d", server_id, len(chunks))
 
 
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    return dot / (norm_a * norm_b + 1e-10)
+
+
 async def _rerank(query: str, documents: list[str]) -> list[int]:
-    """Reranker로 후보 문서 재순위화. 관련도 높은 순 index 목록 반환."""
+    """reranker 모델로 query + documents 임베딩 후 코사인 유사도 기반 재순위화."""
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 f"{settings.ollama_host}/api/embed",
                 json={
                     "model": settings.ollama_rerank_model,
-                    "query": query,
-                    "documents": documents,
+                    "input": [query] + documents,
                 },
             )
             resp.raise_for_status()
-            results = resp.json().get("results", [])
-            return [r["index"] for r in sorted(results, key=lambda x: x["relevance_score"], reverse=True)]
+            embeddings = resp.json()["embeddings"]
+
+        query_emb = embeddings[0]
+        scores = [_cosine_similarity(query_emb, doc_emb) for doc_emb in embeddings[1:]]
+        return sorted(range(len(documents)), key=lambda i: scores[i], reverse=True)
     except Exception as e:
         logger.warning("[rag] rerank failed (fallback to vector order): %s", e)
         return list(range(len(documents)))
