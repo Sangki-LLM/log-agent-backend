@@ -69,6 +69,30 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+def _extract_json_from_thinking(thinking: str) -> str:
+    """thinking 필드에 갇힌 JSON 응답 추출. 중괄호 쌍 매칭 방식."""
+    idx = thinking.find('"error_cause"')
+    if idx == -1:
+        return ""
+    start = thinking.rfind("{", 0, idx)
+    if start == -1:
+        return ""
+    depth = 0
+    for i in range(start, len(thinking)):
+        if thinking[i] == "{":
+            depth += 1
+        elif thinking[i] == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = thinking[start : i + 1]
+                try:
+                    json.loads(candidate)
+                    return candidate
+                except json.JSONDecodeError:
+                    break
+    return ""
+
+
 def _parse_arguments(raw) -> dict:
     if isinstance(raw, dict):
         return raw
@@ -156,6 +180,7 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
                     "messages": messages,
                     "tools": tools_payload,
                     "stream": False,
+                    "think": False,
                 },
             )
             response.raise_for_status()
@@ -166,9 +191,15 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
                 raw = message.get("content", "")
+                if not raw:
+                    thinking = message.get("thinking", "")
+                    if thinking:
+                        raw = _extract_json_from_thinking(thinking)
+                        if raw:
+                            logger.info("[agent] extracted %d chars from thinking field", len(raw))
                 logger.info("[agent] done after %d iterations, content_len=%d", iteration + 1, len(raw))
                 if not raw:
-                    logger.warning("[agent] empty response from ollama, message=%s", message)
+                    logger.warning("[agent] empty response from ollama, message keys=%s", list(message.keys()))
                     return await _fallback_analyze(raw_log)
                 return _strip_code_fence(raw)
 
@@ -201,10 +232,18 @@ async def _fallback_analyze(raw_log: str) -> str:
                     {"role": "user", "content": f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:3000]}\n```"},
                 ],
                 "stream": False,
+                "think": False,
             },
         )
         response.raise_for_status()
-        raw = response.json().get("message", {}).get("content", "")
+        msg = response.json().get("message", {})
+        raw = msg.get("content", "")
+        if not raw:
+            thinking = msg.get("thinking", "")
+            if thinking:
+                raw = _extract_json_from_thinking(thinking)
+                if raw:
+                    logger.info("[agent] fallback extracted %d chars from thinking", len(raw))
         logger.info("[agent] fallback response length=%d", len(raw))
         return _strip_code_fence(raw)
 
