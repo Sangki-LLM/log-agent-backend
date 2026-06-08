@@ -74,7 +74,10 @@ def _find_and_replace(original: str, before: str, after: str) -> str | None:
     """before를 original에서 찾아 after로 교체. 실패 시 None.
     1차: 정확한 매칭
     2차: CRLF → LF 정규화 후 매칭
+    3차: LLM이 들여쓰기를 빼고 줬을 때 — 4/8/2/12칸 들여쓰기 보정 후 매칭
     """
+    import textwrap
+
     if before in original:
         return original.replace(before, after, 1)
 
@@ -83,6 +86,21 @@ def _find_and_replace(original: str, before: str, after: str) -> str | None:
     after_lf = after.replace("\r\n", "\n")
     if before_lf in orig_lf:
         return orig_lf.replace(before_lf, after_lf, 1)
+
+    # LLM이 들여쓰기를 제거한 채로 before를 출력하는 경우 보정
+    before_dedented = textwrap.dedent(before_lf)
+    after_dedented = textwrap.dedent(after_lf)
+    for indent in ("    ", "        ", "  ", "\t", "            "):
+        re_before = "\n".join(
+            indent + line if line.strip() else line
+            for line in before_dedented.splitlines()
+        )
+        if re_before in orig_lf:
+            re_after = "\n".join(
+                indent + line if line.strip() else line
+                for line in after_dedented.splitlines()
+            )
+            return orig_lf.replace(re_before, re_after, 1)
 
     return None
 
