@@ -1,5 +1,7 @@
 import hashlib
+import json
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import select
@@ -68,6 +70,39 @@ async def receive_error(
     return {"status": "received"}
 
 
+def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
+    """file_patch의 before/after를 로컬 repo에 즉시 적용해 patched_content를 저장.
+    approve 시 before 매칭 없이 바로 사용할 수 있도록 함.
+    로컬 파일은 건드리지 않고 메모리에서만 계산.
+    """
+    try:
+        data = json.loads(suggestion)
+        fp = data.get("file_patch", {})
+        file_path = fp.get("file_path", "")
+        before = fp.get("before", "")
+        after = fp.get("after", "")
+        if not (file_path and before and after):
+            return suggestion
+
+        from app.services.git_service import _repo_path
+        try:
+            original = (_repo_path(server_id) / file_path).read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            logger.warning("[pipeline] patched_content: file not found — %s", file_path)
+            return suggestion
+
+        if before not in original:
+            logger.warning("[pipeline] patched_content: 'before' not found in %s", file_path)
+            return suggestion
+
+        data["file_patch"]["patched_content"] = original.replace(before, after, 1)
+        logger.info("[pipeline] patched_content computed for %s", file_path)
+        return json.dumps(data, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("[pipeline] patched_content failed: %s", e)
+        return suggestion
+
+
 async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None:
     import asyncio
 
@@ -101,6 +136,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         try:
             suggestion = await ollama_service.analyze_log(server.id, raw_log, payload.stack_trace)
             logger.info("[pipeline] ollama response length=%d", len(suggestion or ""))
+            suggestion = _enrich_with_patched_content(suggestion, server.id)
         except Exception as e:
             logger.error("[pipeline] ollama failed: %s", e, exc_info=True)
             suggestion = ""
