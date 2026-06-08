@@ -32,10 +32,12 @@ Once you have enough context, respond ONLY in this JSON structure (no markdown, 
   }
 }
 
-Rules for file_patch:
-- 'before' must be an exact substring of the target file (copy-paste from the source shown to you)
-- provide the MINIMAL change needed — do not rewrite the whole file
-- if you cannot determine a safe patch, omit the file_patch field entirely"""
+Rules for file_patch (REQUIRED — never omit):
+- 'file_path': relative path from repo root of the file to modify
+- 'before': copy-paste the EXACT lines from the source file shown to you that need to change (including indentation)
+- 'after': the corrected replacement lines
+- provide the MINIMAL change — do not rewrite the whole file
+- if multiple files need changes, pick the single most impactful one"""
 
 TOOLS = [
     {
