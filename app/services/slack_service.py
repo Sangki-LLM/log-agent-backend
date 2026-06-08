@@ -21,7 +21,14 @@ def _build_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
 
     error_cause = suggestion.get("error_cause", "분석 중...")
     bottleneck = suggestion.get("bottleneck", "")
-    fix_code = suggestion.get("suggested_fix", record.llm_suggestion or "")[:1200]
+    fix_explanation = suggestion.get("suggested_fix", "")
+    file_patch = suggestion.get("file_patch", {})
+    patch_path = file_patch.get("file_path", "")
+    patch_after = file_patch.get("after", "")
+    if patch_after:
+        fix_code = f"{fix_explanation}\n\n`{patch_path}`\n```\n{patch_after}\n```"[:2800]
+    else:
+        fix_code = (fix_explanation or record.llm_suggestion or "")[:1200]
 
     approve_url = f"{settings.public_url}/api/v1/analysis/approve/{record.id}"
     reject_url = f"{settings.public_url}/api/v1/analysis/reject/{record.id}"
