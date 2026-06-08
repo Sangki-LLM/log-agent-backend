@@ -56,6 +56,49 @@ def get_remote_head(server_id: int, branch: str) -> str:
         return sha.decode("ascii") if isinstance(sha, bytes) else sha
 
 
+_JAVA_BOUNDARY = re.compile(
+    r"^[ \t]{0,4}"
+    r"(?:(?:public|private|protected|static|final|abstract|synchronized|default|override)\s+)*"
+    r"(?:class\s|interface\s|enum\s|record\s|fun\s+\w|\w[\w<>\[\]]*\s+\w+\s*\()"
+)
+
+
+def _split_java_semantic(content: str) -> list[str]:
+    """Java/Kotlin 파일을 메서드/클래스 경계로 분할."""
+    lines = content.split("\n")
+    boundaries = [0]
+    for i, line in enumerate(lines[1:], 1):
+        indent = len(line) - len(line.lstrip())
+        if indent <= 4 and line.strip() and _JAVA_BOUNDARY.match(line):
+            boundaries.append(i)
+    blocks = []
+    for idx, start in enumerate(boundaries):
+        end = boundaries[idx + 1] if idx + 1 < len(boundaries) else len(lines)
+        block = "\n".join(lines[start:end]).strip()
+        if block:
+            blocks.append(block)
+    return blocks or [content]
+
+
+def _make_chunks(path: str, content: str, chunk_size: int = 1500, overlap: int = 200) -> list[str]:
+    """파일을 의미 단위로 분할 후 sliding window 적용."""
+    ext = Path(path).suffix.lower()
+    blocks = _split_java_semantic(content) if ext in {".java", ".kt"} else [content]
+
+    result = []
+    for block in blocks:
+        if len(block) <= chunk_size:
+            result.append(block)
+        else:
+            start = 0
+            while start < len(block):
+                result.append(block[start:start + chunk_size])
+                if start + chunk_size >= len(block):
+                    break
+                start += chunk_size - overlap
+    return result
+
+
 def list_all_files_at_commit(server_id: int, commit_hash: str, chunk_size: int = 1500) -> list[tuple[str, str]]:
     """Working tree를 직접 읽어 소스 파일 청크 목록 반환."""
     SOURCE_EXTENSIONS = {".java", ".kt", ".py", ".ts", ".tsx", ".js", ".go"}
@@ -67,14 +110,13 @@ def list_all_files_at_commit(server_id: int, commit_hash: str, chunk_size: int =
             continue
         if file_path.suffix.lower() not in SOURCE_EXTENSIONS:
             continue
-        # .git 디렉토리 제외
         if ".git" in file_path.parts:
             continue
         rel = str(file_path.relative_to(base)).replace("\\", "/")
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
-            for i in range(0, len(content), chunk_size):
-                chunks.append((rel, content[i:i + chunk_size]))
+            for block in _make_chunks(rel, content, chunk_size):
+                chunks.append((rel, block))
         except Exception:
             pass
 

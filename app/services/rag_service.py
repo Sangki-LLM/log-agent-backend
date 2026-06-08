@@ -75,8 +75,28 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
     logger.info("[rag] index complete server=%s chunks=%d", server_id, len(chunks))
 
 
+async def _rerank(query: str, documents: list[str]) -> list[int]:
+    """Reranker로 후보 문서 재순위화. 관련도 높은 순 index 목록 반환."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{settings.ollama_host}/api/rerank",
+                json={
+                    "model": settings.ollama_rerank_model,
+                    "query": query,
+                    "documents": documents,
+                },
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            return [r["index"] for r in sorted(results, key=lambda x: x["relevance_score"], reverse=True)]
+    except Exception as e:
+        logger.warning("[rag] rerank failed (fallback to vector order): %s", e)
+        return list(range(len(documents)))
+
+
 async def search_relevant_files(server_id: int, query: str, n_results: int = 5) -> list[str]:
-    """에러 쿼리와 의미적으로 유사한 파일 경로 반환."""
+    """에러 쿼리와 의미적으로 유사한 파일 경로 반환 (벡터 검색 → reranker 재순위화)."""
     try:
         col = _collection(server_id)
         count = col.count()
@@ -84,22 +104,33 @@ async def search_relevant_files(server_id: int, query: str, n_results: int = 5) 
             return []
 
         query_embeddings = await _embed([query[:2000]])
+        # reranker 후보를 위해 넉넉하게 가져옴
+        candidates = min(n_results * 5, count)
         results = col.query(
             query_embeddings=query_embeddings,
-            n_results=min(n_results * 3, count),
+            n_results=candidates,
         )
 
+        # (path, document) 쌍 목록 (중복 포함 — reranker가 청크 단위로 판단)
+        all_docs = list(zip(results["metadatas"][0], results["documents"][0]))
+        if not all_docs:
+            return []
+
+        # Reranker로 재순위화
+        ranked_indices = await _rerank(query, [doc for _, doc in all_docs])
+
+        # 파일 경로 기준 중복 제거 (가장 높은 순위 청크만 채택)
         seen: set[str] = set()
         paths: list[str] = []
-        for meta in results["metadatas"][0]:
-            p = meta["path"]
-            if p not in seen:
-                seen.add(p)
-                paths.append(p)
+        for idx in ranked_indices:
+            path = all_docs[idx][0]["path"]
+            if path not in seen:
+                seen.add(path)
+                paths.append(path)
             if len(paths) >= n_results:
                 break
 
-        logger.info("[rag] search returned %s", paths)
+        logger.info("[rag] reranked search returned %s", paths)
         return paths
     except Exception as e:
         logger.warning("[rag] search failed: %s", e)

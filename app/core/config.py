@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Ollama embedding model for RAG
     ollama_embed_model: str = "nomic-embed-text"
 
+    # Ollama reranker model
+    ollama_rerank_model: str = "bge-reranker-v2-m3"
+
     # Public URL of this backend (for Slack approve/reject links)
     public_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:5173"
