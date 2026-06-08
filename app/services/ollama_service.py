@@ -23,9 +23,19 @@ Once you have enough context, respond ONLY in this JSON structure (no markdown, 
 {
   "error_cause": "<brief root cause in Korean>",
   "bottleneck": "<suspected bottleneck or affected component>",
-  "suggested_fix": "<corrected code block in markdown>",
-  "commit_message": "<concise git commit message starting with fix:>"
-}"""
+  "suggested_fix": "<fix explanation in Korean>",
+  "commit_message": "<concise git commit message starting with fix:>",
+  "file_patch": {
+    "file_path": "<relative path from repo root, e.g. src/main/java/com/example/Foo.java>",
+    "before": "<exact code snippet to replace — must match the file exactly, including indentation>",
+    "after": "<corrected replacement code>"
+  }
+}
+
+Rules for file_patch:
+- 'before' must be an exact substring of the target file (copy-paste from the source shown to you)
+- provide the MINIMAL change needed — do not rewrite the whole file
+- if you cannot determine a safe patch, omit the file_patch field entirely"""
 
 TOOLS = [
     {
