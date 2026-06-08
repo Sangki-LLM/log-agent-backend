@@ -79,66 +79,64 @@ async def create_fix_pr(server: Server, record: AnalysisRecord) -> str:
     error_cause = suggestion.get("error_cause", "")
     fix_code = suggestion.get("suggested_fix", record.llm_suggestion or "")[:3000]
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        # 1. 베이스 브랜치 최신 SHA 조회
-        resp = await client.get(
-            f"{_GH_API}/repos/{owner}/{repo}/git/ref/heads/{server.git_branch}",
-            headers=hdrs,
-        )
-        resp.raise_for_status()
-        base_sha = resp.json()["object"]["sha"]
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # 1. 베이스 브랜치 최신 SHA 조회
+            resp = await client.get(
+                f"{_GH_API}/repos/{owner}/{repo}/git/ref/heads/{server.git_branch}",
+                headers=hdrs,
+            )
+            resp.raise_for_status()
+            base_sha = resp.json()["object"]["sha"]
 
-        # 2. 새 브랜치 생성
-        resp = await client.post(
-            f"{_GH_API}/repos/{owner}/{repo}/git/refs",
-            headers=hdrs,
-            json={"ref": f"refs/heads/{branch_name}", "sha": base_sha},
-        )
-        if resp.status_code not in (201, 422):  # 422 = 이미 존재
+            # 2. 새 브랜치 생성
+            resp = await client.post(
+                f"{_GH_API}/repos/{owner}/{repo}/git/refs",
+                headers=hdrs,
+                json={"ref": f"refs/heads/{branch_name}", "sha": base_sha},
+            )
+            if resp.status_code not in (201, 422):  # 422 = 이미 존재
+                resp.raise_for_status()
+
+            # 3. 수정 제안 파일 커밋
+            file_path = f".log-agent/suggestions/fix-record-{record.id}.md"
+            encoded = base64.b64encode(_build_file_content(record).encode()).decode()
+            resp = await client.put(
+                f"{_GH_API}/repos/{owner}/{repo}/contents/{file_path}",
+                headers=hdrs,
+                json={
+                    "message": f"fix: log-agent suggestion for record #{record.id}\n\n{record.trigger_line[:200]}",
+                    "content": encoded,
+                    "branch": branch_name,
+                },
+            )
             resp.raise_for_status()
 
-        # 3. 수정 제안 파일 커밋
-        file_path = f".log-agent/suggestions/fix-record-{record.id}.md"
-        encoded = base64.b64encode(_build_file_content(record).encode()).decode()
-        resp = await client.put(
-            f"{_GH_API}/repos/{owner}/{repo}/contents/{file_path}",
-            headers=hdrs,
-            json={
-                "message": f"fix: log-agent suggestion for record #{record.id}\n\n{record.trigger_line[:200]}",
-                "content": encoded,
-                "branch": branch_name,
-            },
-        )
-        resp.raise_for_status()
-
-        # 4. PR 생성
-        pr_body = f"""## 🤖 Log Agent 자동 분석 결과
-
-**에러 원인**: {error_cause}
-
-**수정 제안**:
-```
-{fix_code}
-```
-
----
-*Record ID: #{record.id}*
-*트리거: `{record.trigger_line[:300]}`*
-"""
-        resp = await client.post(
-            f"{_GH_API}/repos/{owner}/{repo}/pulls",
-            headers=hdrs,
-            json={
-                "title": f"[Log Agent] Fix: {record.trigger_line[:80]}",
-                "body": pr_body,
-                "head": branch_name,
-                "base": server.git_branch,
-            },
-        )
-        resp.raise_for_status()
-        pr_url = resp.json().get("html_url", "")
-        logger.info("[github] PR created: %s", pr_url)
-        return pr_url
+            # 4. PR 생성
+            pr_title = f"[Log Agent] Fix: {record.trigger_line[:80]}"
+            pr_body = (
+                "## 🤖 Log Agent 자동 분석 결과\n\n"
+                f"**에러 원인**: {error_cause}\n\n"
+                "**수정 제안**:\n"
+                f"```\n{fix_code}\n```\n\n"
+                "---\n"
+                f"*Record ID: #{record.id}*\n"
+                f"*트리거: `{record.trigger_line[:300]}`*"
+            )
+            resp = await client.post(
+                f"{_GH_API}/repos/{owner}/{repo}/pulls",
+                headers=hdrs,
+                json={
+                    "title": pr_title,
+                    "body": pr_body,
+                    "head": branch_name,
+                    "base": server.git_branch,
+                },
+            )
+            resp.raise_for_status()
+            pr_url = resp.json().get("html_url", "")
+            logger.info("[github] PR created: %s", pr_url)
+            return pr_url
 
     except Exception as e:
         logger.error("[github] PR creation failed: %s", e, exc_info=True)
