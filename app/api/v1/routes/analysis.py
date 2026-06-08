@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.server import AnalysisRecord, Server
 from app.schemas.analysis import AnalysisRecordResponse
-from app.services import github_service, ollama_service, slack_service
+from app.services import github_service, slack_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,22 +51,11 @@ async def approve_fix(record_id: int, db: AsyncSession = Depends(get_db)):
             await db.commit()
         logger.info("[approve] GitHub PR: %s", pr_url or "skipped")
 
-    # 원본 Slack 메시지 업데이트 (버튼 → 승인 상태)
-    if server:
-        await slack_service.update_message_status(
-            record.slack_ts or "",
-            record.slack_channel or "",
-            server,
-            record,
-            pr_url,
-            approved=True,
-        )
-
     name = server.name if server else f"#{record.server_id}"
     result_text = f"✅ [{name}] 분석 결과 수락됨 (record #{record_id})"
     if pr_url:
         result_text += f" — {pr_url}"
-    await slack_service.send_result(result_text)
+    await slack_service.send_result(result_text, server)
 
     return _html_page(
         "✅ 수락됨",
@@ -86,19 +75,8 @@ async def reject_fix(record_id: int, db: AsyncSession = Depends(get_db)):
     record.status = "rejected"
     await db.commit()
 
-    # 원본 Slack 메시지 업데이트 (버튼 → 거절 상태)
-    if server:
-        await slack_service.update_message_status(
-            record.slack_ts or "",
-            record.slack_channel or "",
-            server,
-            record,
-            "",
-            approved=False,
-        )
-
     name = server.name if server else f"#{record.server_id}"
-    await slack_service.send_result(f"❌ [{name}] 수정 제안 거절됨 (record #{record_id})")
+    await slack_service.send_result(f"❌ [{name}] 수정 제안 거절됨 (record #{record_id})", server)
     return _html_page("❌ 거절됨", "수정 제안이 거절되었습니다.")
 
 

@@ -21,6 +21,7 @@ async def register_server(body: ServerCreate, db: AsyncSession = Depends(get_db)
         git_repo_url=body.git_repo_url,
         git_branch=body.git_branch,
         github_token=body.github_token or None,
+        slack_webhook_url=body.slack_webhook_url or None,
     )
     db.add(server)
     await db.flush()
@@ -75,6 +76,8 @@ async def update_server(server_id: int, body: ServerUpdate, db: AsyncSession = D
         server.git_branch = body.git_branch
     if body.github_token is not None:
         server.github_token = body.github_token or None
+    if body.slack_webhook_url is not None:
+        server.slack_webhook_url = body.slack_webhook_url or None
 
     if body.hosts is not None:
         for host in server.hosts:

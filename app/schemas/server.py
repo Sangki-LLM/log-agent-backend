@@ -7,6 +7,7 @@ class ServerCreate(BaseModel):
     git_repo_url: str
     git_branch: str = "main"
     github_token: str = ""
+    slack_webhook_url: str = ""
 
 
 class ServerUpdate(BaseModel):
@@ -15,6 +16,7 @@ class ServerUpdate(BaseModel):
     git_repo_url: str | None = None
     git_branch: str | None = None
     github_token: str | None = None
+    slack_webhook_url: str | None = None
 
 
 class ServerResponse(BaseModel):
@@ -25,6 +27,7 @@ class ServerResponse(BaseModel):
     hosts: list[str]
     git_repo_url: str
     git_branch: str
+    slack_webhook_url: str | None
     is_active: bool
 
     @classmethod
@@ -35,6 +38,7 @@ class ServerResponse(BaseModel):
             hosts=[h.host for h in server.hosts],
             git_repo_url=server.git_repo_url,
             git_branch=server.git_branch,
+            slack_webhook_url=server.slack_webhook_url,
             is_active=server.is_active,
         )
 

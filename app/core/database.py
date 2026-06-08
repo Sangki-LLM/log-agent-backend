@@ -35,8 +35,8 @@ async def init_db() -> None:
 async def _migrate(conn) -> None:
     """기존 테이블에 새 컬럼을 추가합니다 (이미 존재하면 무시)."""
     new_columns = [
-        "ALTER TABLE analysis_records ADD COLUMN slack_channel VARCHAR(50)",
         "ALTER TABLE analysis_records ADD COLUMN github_pr_url VARCHAR(500)",
+        "ALTER TABLE servers ADD COLUMN slack_webhook_url VARCHAR(500)",
     ]
     for stmt in new_columns:
         try:

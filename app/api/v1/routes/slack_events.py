@@ -50,12 +50,12 @@ async def handle_slack_action(request: Request):
         if action_id == "approve_fix":
             record.status = "approved"
             await db.commit()
-            await slack_service.send_result(f"✅ [{name}] 분석 결과 수락됨 (record #{record_id})")
+            await slack_service.send_result(f"✅ [{name}] 분석 결과 수락됨 (record #{record_id})", server)
             logger.info("[slack] approved record=%s", record_id)
         elif action_id == "reject_fix":
             record.status = "rejected"
             await db.commit()
-            await slack_service.send_result(f"❌ [{name}] 수정 제안 거절됨 (record #{record_id})")
+            await slack_service.send_result(f"❌ [{name}] 수정 제안 거절됨 (record #{record_id})", server)
             logger.info("[slack] rejected record=%s", record_id)
 
     return Response(status_code=200)

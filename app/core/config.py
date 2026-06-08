@@ -8,11 +8,8 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "gemma4:12b"
 
-    # Slack Incoming Webhook (메시지 전송 전용, ts 추적 불가)
+    # Slack Incoming Webhook (전역 기본값, 서버별 설정이 없을 때 사용)
     slack_webhook_url: str = ""
-    # Slack Bot Token (chat.postMessage + chat.update 지원, ts 추적 가능)
-    slack_bot_token: str = ""
-    slack_channel_id: str = ""
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./agent.db"

@@ -118,11 +118,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         logger.info("[pipeline] record saved id=%s", record.id)
 
         try:
-            slack_ts, slack_channel = await slack_service.send_analysis(server, record)
-            if slack_ts:
-                record.slack_ts = slack_ts
-                record.slack_channel = slack_channel
-                await db.commit()
-            logger.info("[pipeline] slack sent ts=%s channel=%s", slack_ts, slack_channel)
+            await slack_service.send_analysis(server, record)
+            logger.info("[pipeline] slack sent")
         except Exception as e:
             logger.error("[pipeline] slack failed: %s", e, exc_info=True)
