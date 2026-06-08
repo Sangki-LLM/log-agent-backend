@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -5,10 +6,10 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import httpx
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool as langchain_tool
 from langchain_ollama import ChatOllama
+from langgraph.errors import GraphRecursionError
+from langgraph.prebuilt import create_react_agent
 
 from app.core.config import settings
 
@@ -102,24 +103,24 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
         think=False,
     )
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
+    graph = create_react_agent(model=llm, tools=tools, prompt=SYSTEM_PROMPT)
 
-    agent = create_tool_calling_agent(llm, tools, prompt)
-    agent_executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        max_iterations=15,
-        max_execution_time=120,
-        early_stopping_method="generate",
-        handle_parsing_errors=True,
-    )
-
-    result = await agent_executor.ainvoke({"input": f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```"})
-    raw = _strip_code_fence(result.get("output", ""))
+    try:
+        result = await asyncio.wait_for(
+            graph.ainvoke(
+                {"messages": [("user", f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```")]},
+                config={"recursion_limit": 30},
+            ),
+            timeout=120,
+        )
+        raw = _strip_code_fence(result["messages"][-1].content)
+        logger.info("[agent] done, content_len=%d", len(raw))
+    except GraphRecursionError:
+        logger.warning("[agent] recursion limit reached, falling back")
+        return await _fallback_analyze(raw_log)
+    except asyncio.TimeoutError:
+        logger.warning("[agent] timeout, falling back")
+        return await _fallback_analyze(raw_log)
 
     try:
         json.loads(raw)
@@ -130,7 +131,7 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
 
 
 async def _fallback_analyze(raw_log: str) -> str:
-    """AgentExecutor 결과가 유효한 JSON이 아닐 때 structured output으로 재시도."""
+    """에이전트 결과가 유효한 JSON이 아닐 때 structured output으로 재시도."""
     logger.info("[agent] fallback with structured output")
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)
