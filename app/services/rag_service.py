@@ -80,7 +80,7 @@ async def _rerank(query: str, documents: list[str]) -> list[int]:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"{settings.ollama_host}/api/rerank",
+                f"{settings.ollama_host}/v1/rerank",
                 json={
                     "model": settings.ollama_rerank_model,
                     "query": query,
