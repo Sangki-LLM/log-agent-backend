@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 import chromadb
@@ -75,29 +77,35 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
     logger.info("[rag] index complete server=%s chunks=%d", server_id, len(chunks))
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
-    return dot / (norm_a * norm_b + 1e-10)
+async def _rerank_single(client: httpx.AsyncClient, query: str, document: str) -> float:
+    """문서 하나의 관련도 점수를 chat API로 조회."""
+    prompt = (
+        f"Given a query and a passage, judge whether the passage is relevant to the query.\n"
+        f"Reply with only a relevance score between 0.0 and 1.0.\n\n"
+        f"Query: {query}\n\n"
+        f"Passage: {document[:800]}"
+    )
+    resp = await client.post(
+        f"{settings.ollama_host}/api/chat",
+        json={
+            "model": settings.ollama_rerank_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+        },
+    )
+    resp.raise_for_status()
+    content = resp.json().get("message", {}).get("content", "0")
+    match = re.search(r"([01]\.?\d*)", content)
+    return float(match.group(1)) if match else 0.0
 
 
 async def _rerank(query: str, documents: list[str]) -> list[int]:
-    """reranker 모델로 query + documents 임베딩 후 코사인 유사도 기반 재순위화."""
+    """chat 기반 reranker로 문서 재순위화. 관련도 높은 순 index 목록 반환."""
     try:
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{settings.ollama_host}/api/embed",
-                json={
-                    "model": settings.ollama_rerank_model,
-                    "input": [query] + documents,
-                },
+            scores = await asyncio.gather(
+                *[_rerank_single(client, query, doc) for doc in documents]
             )
-            resp.raise_for_status()
-            embeddings = resp.json()["embeddings"]
-
-        query_emb = embeddings[0]
-        scores = [_cosine_similarity(query_emb, doc_emb) for doc_emb in embeddings[1:]]
         return sorted(range(len(documents)), key=lambda i: scores[i], reverse=True)
     except Exception as e:
         logger.warning("[rag] rerank failed (fallback to vector order): %s", e)
