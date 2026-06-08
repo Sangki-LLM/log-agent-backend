@@ -102,7 +102,7 @@ async def _rerank_single(client: httpx.AsyncClient, query: str, document: str) -
 async def _rerank(query: str, documents: list[str]) -> list[int]:
     """chat 기반 reranker로 문서 재순위화. 관련도 높은 순 index 목록 반환."""
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             scores = await asyncio.gather(
                 *[_rerank_single(client, query, doc) for doc in documents]
             )
@@ -121,8 +121,8 @@ async def search_relevant_files(server_id: int, query: str, n_results: int = 5) 
             return []
 
         query_embeddings = await _embed([query[:2000]])
-        # reranker 후보를 위해 넉넉하게 가져옴
-        candidates = min(n_results * 5, count)
+        # chat reranker는 Ollama가 순차 처리하므로 후보를 2배로 제한
+        candidates = min(n_results * 2, count)
         results = col.query(
             query_embeddings=query_embeddings,
             n_results=candidates,
