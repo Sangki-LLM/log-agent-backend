@@ -166,7 +166,10 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
                 raw = message.get("content", "")
-                logger.info("[agent] done after %d iterations", iteration + 1)
+                logger.info("[agent] done after %d iterations, content_len=%d", iteration + 1, len(raw))
+                if not raw:
+                    logger.warning("[agent] empty response from ollama, message=%s", message)
+                    return await _fallback_analyze(raw_log)
                 return _strip_code_fence(raw)
 
             for call in tool_calls:
@@ -180,7 +183,30 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
                 messages.append({"role": "tool", "content": result})
 
     logger.warning("[agent] max iterations reached without final response")
-    return ""
+    return await _fallback_analyze(raw_log)
+
+
+async def _fallback_analyze(raw_log: str) -> str:
+    """Agentic 분석 실패 시 단순 one-shot 프롬프트로 재시도."""
+    logger.info("[agent] fallback simple prompt")
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)
+    ) as client:
+        response = await client.post(
+            f"{settings.ollama_host}/api/chat",
+            json={
+                "model": settings.ollama_model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:3000]}\n```"},
+                ],
+                "stream": False,
+            },
+        )
+        response.raise_for_status()
+        raw = response.json().get("message", {}).get("content", "")
+        logger.info("[agent] fallback response length=%d", len(raw))
+        return _strip_code_fence(raw)
 
 
 async def stream_analysis(raw_log: str) -> AsyncGenerator[str, None]:
