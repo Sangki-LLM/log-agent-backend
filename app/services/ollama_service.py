@@ -6,10 +6,10 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import httpx
+from langchain.agents import create_react_agent
 from langchain_core.tools import tool as langchain_tool
 from langchain_ollama import ChatOllama
 from langgraph.errors import GraphRecursionError
-from langgraph.prebuilt import create_react_agent
 
 from app.core.config import settings
 
