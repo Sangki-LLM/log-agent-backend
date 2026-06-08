@@ -70,6 +70,23 @@ async def receive_error(
     return {"status": "received"}
 
 
+def _find_and_replace(original: str, before: str, after: str) -> str | None:
+    """before를 original에서 찾아 after로 교체. 실패 시 None.
+    1차: 정확한 매칭
+    2차: CRLF → LF 정규화 후 매칭
+    """
+    if before in original:
+        return original.replace(before, after, 1)
+
+    orig_lf = original.replace("\r\n", "\n")
+    before_lf = before.replace("\r\n", "\n")
+    after_lf = after.replace("\r\n", "\n")
+    if before_lf in orig_lf:
+        return orig_lf.replace(before_lf, after_lf, 1)
+
+    return None
+
+
 def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
     """file_patch의 before/after를 로컬 repo에 즉시 적용해 patched_content를 저장.
     approve 시 before 매칭 없이 바로 사용할 수 있도록 함.
@@ -85,17 +102,23 @@ def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
             return suggestion
 
         from app.services.git_service import _repo_path
+        full_path = _repo_path(server_id) / file_path
         try:
-            original = (_repo_path(server_id) / file_path).read_text(encoding="utf-8", errors="replace")
+            original = full_path.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
-            logger.warning("[pipeline] patched_content: file not found — %s", file_path)
+            logger.warning("[pipeline] patched_content: file not found — %s", full_path)
             return suggestion
 
-        if before not in original:
-            logger.warning("[pipeline] patched_content: 'before' not found in %s", file_path)
+        patched = _find_and_replace(original, before, after)
+        if patched is None:
+            logger.warning(
+                "[pipeline] patched_content: 'before' not found in %s "
+                "(file_len=%d before_len=%d before_head=%r)",
+                file_path, len(original), len(before), before[:80],
+            )
             return suggestion
 
-        data["file_patch"]["patched_content"] = original.replace(before, after, 1)
+        data["file_patch"]["patched_content"] = patched
         logger.info("[pipeline] patched_content computed for %s", file_path)
         return json.dumps(data, ensure_ascii=False)
     except Exception as e:
