@@ -70,11 +70,46 @@ async def receive_error(
     return {"status": "received"}
 
 
+def _fuzzy_replace(original: str, before: str, after: str) -> str | None:
+    """라인 단위 fuzzy 매칭: 각 라인을 strip해서 순서대로 찾고, 원본 들여쓰기 유지하며 after로 교체."""
+    import textwrap
+
+    before_keys = [l.strip() for l in before.splitlines() if l.strip()]
+    if not before_keys:
+        return None
+
+    orig_lines = original.splitlines()
+    n, blen = len(orig_lines), len(before_keys)
+
+    for start in range(n):
+        j, end = 0, start
+        while end < n and j < blen:
+            stripped = orig_lines[end].strip()
+            if stripped == before_keys[j]:
+                j += 1
+            elif stripped:  # 비어있지 않은 라인이 불일치 → 이 start 위치는 아님
+                break
+            end += 1
+
+        if j == blen:
+            # 매칭 성공: 첫 번째 매칭 라인의 들여쓰기 기준으로 after 재들여쓰기
+            indent = len(orig_lines[start]) - len(orig_lines[start].lstrip())
+            indent_str = " " * indent
+            after_lines = [
+                indent_str + l if l.strip() else l
+                for l in textwrap.dedent(after).strip().splitlines()
+            ]
+            return "\n".join(orig_lines[:start] + after_lines + orig_lines[end:])
+
+    return None
+
+
 def _find_and_replace(original: str, before: str, after: str) -> str | None:
     """before를 original에서 찾아 after로 교체. 실패 시 None.
     1차: 정확한 매칭
     2차: CRLF → LF 정규화 후 매칭
-    3차: LLM이 들여쓰기를 빼고 줬을 때 — 4/8/2/12칸 들여쓰기 보정 후 매칭
+    3차: 들여쓰기 보정 후 매칭
+    4차: 라인 단위 fuzzy 매칭 (공백·빈 줄 무시)
     """
     import textwrap
 
@@ -87,7 +122,6 @@ def _find_and_replace(original: str, before: str, after: str) -> str | None:
     if before_lf in orig_lf:
         return orig_lf.replace(before_lf, after_lf, 1)
 
-    # LLM이 들여쓰기를 제거한 채로 before를 출력하는 경우 보정
     before_dedented = textwrap.dedent(before_lf)
     after_dedented = textwrap.dedent(after_lf)
     for indent in ("    ", "        ", "  ", "\t", "            "):
@@ -102,7 +136,7 @@ def _find_and_replace(original: str, before: str, after: str) -> str | None:
             )
             return orig_lf.replace(re_before, re_after, 1)
 
-    return None
+    return _fuzzy_replace(orig_lf, before_lf, after_lf)
 
 
 def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
