@@ -1,7 +1,5 @@
-import asyncio
 import json
 import logging
-import re
 from pathlib import Path
 
 import chromadb
@@ -77,43 +75,8 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
     logger.info("[rag] index complete server=%s chunks=%d", server_id, len(chunks))
 
 
-async def _rerank_single(client: httpx.AsyncClient, query: str, document: str) -> float:
-    """문서 하나의 관련도 점수를 chat API로 조회."""
-    prompt = (
-        f"Given a query and a passage, judge whether the passage is relevant to the query.\n"
-        f"Reply with only a relevance score between 0.0 and 1.0.\n\n"
-        f"Query: {query}\n\n"
-        f"Passage: {document[:800]}"
-    )
-    resp = await client.post(
-        f"{settings.ollama_host}/api/chat",
-        json={
-            "model": settings.ollama_rerank_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-        },
-    )
-    resp.raise_for_status()
-    content = resp.json().get("message", {}).get("content", "0")
-    match = re.search(r"([01]\.?\d*)", content)
-    return float(match.group(1)) if match else 0.0
-
-
-async def _rerank(query: str, documents: list[str]) -> list[int]:
-    """chat 기반 reranker로 문서 재순위화. 관련도 높은 순 index 목록 반환."""
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            scores = await asyncio.gather(
-                *[_rerank_single(client, query, doc) for doc in documents]
-            )
-        return sorted(range(len(documents)), key=lambda i: scores[i], reverse=True)
-    except Exception as e:
-        logger.warning("[rag] rerank failed (fallback to vector order): %s", e)
-        return list(range(len(documents)))
-
-
 async def search_relevant_files(server_id: int, query: str, n_results: int = 5) -> list[str]:
-    """에러 쿼리와 의미적으로 유사한 파일 경로 반환 (벡터 검색 → reranker 재순위화)."""
+    """에러 쿼리와 의미적으로 유사한 파일 경로 반환 (벡터 검색)."""
     try:
         col = _collection(server_id)
         count = col.count()
@@ -121,33 +84,26 @@ async def search_relevant_files(server_id: int, query: str, n_results: int = 5) 
             return []
 
         query_embeddings = await _embed([query[:2000]])
-        # chat reranker는 Ollama가 순차 처리하므로 후보를 2배로 제한
-        candidates = min(n_results * 2, count)
         results = col.query(
             query_embeddings=query_embeddings,
-            n_results=candidates,
+            n_results=min(n_results, count),
         )
 
-        # (path, document) 쌍 목록 (중복 포함 — reranker가 청크 단위로 판단)
         all_docs = list(zip(results["metadatas"][0], results["documents"][0]))
         if not all_docs:
             return []
 
-        # Reranker로 재순위화
-        ranked_indices = await _rerank(query, [doc for _, doc in all_docs])
-
-        # 파일 경로 기준 중복 제거 (가장 높은 순위 청크만 채택)
         seen: set[str] = set()
         paths: list[str] = []
-        for idx in ranked_indices:
-            path = all_docs[idx][0]["path"]
+        for meta, _ in all_docs:
+            path = meta["path"]
             if path not in seen:
                 seen.add(path)
                 paths.append(path)
             if len(paths) >= n_results:
                 break
 
-        logger.info("[rag] reranked search returned %s", paths)
+        logger.info("[rag] search returned %s", paths)
         return paths
     except Exception as e:
         logger.warning("[rag] search failed: %s", e)
