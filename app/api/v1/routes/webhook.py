@@ -140,9 +140,8 @@ def _find_and_replace(original: str, before: str, after: str) -> str | None:
 
 
 def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
-    """file_patch의 before/after를 로컬 repo에 즉시 적용해 patched_content를 저장.
-    approve 시 before 매칭 없이 바로 사용할 수 있도록 함.
-    로컬 파일은 건드리지 않고 메모리에서만 계산.
+    """분석 시점에 원본 파일 전체를 original_content로 저장하고, 패치도 가능하면 즉시 계산.
+    승인 시에는 patched_content가 있으면 바로 사용, 없으면 original_content로 재시도.
     """
     try:
         data = json.loads(suggestion)
@@ -150,7 +149,7 @@ def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
         file_path = fp.get("file_path", "")
         before = fp.get("before", "")
         after = fp.get("after", "")
-        if not (file_path and before and after):
+        if not file_path:
             return suggestion
 
         from app.services.git_service import _repo_path
@@ -158,23 +157,27 @@ def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
         try:
             original = full_path.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
-            logger.warning("[pipeline] patched_content: file not found — %s", full_path)
+            logger.warning("[pipeline] file not found — %s", full_path)
             return suggestion
 
-        patched = _find_and_replace(original, before, after)
-        if patched is None:
-            logger.warning(
-                "[pipeline] patched_content: 'before' not found in %s "
-                "(file_len=%d before_len=%d before_head=%r)",
-                file_path, len(original), len(before), before[:80],
-            )
-            return suggestion
+        # 원본 파일 전체를 항상 저장 (승인 시 패치 재시도 기반)
+        data["file_patch"]["original_content"] = original
 
-        data["file_patch"]["patched_content"] = patched
-        logger.info("[pipeline] patched_content computed for %s", file_path)
+        if before and after:
+            patched = _find_and_replace(original, before, after)
+            if patched is not None:
+                data["file_patch"]["patched_content"] = patched
+                logger.info("[pipeline] patched_content computed for %s", file_path)
+            else:
+                logger.warning(
+                    "[pipeline] before not found in %s — will retry at approval time "
+                    "(before_head=%r)",
+                    file_path, before[:80],
+                )
+
         return json.dumps(data, ensure_ascii=False)
     except Exception as e:
-        logger.warning("[pipeline] patched_content failed: %s", e)
+        logger.warning("[pipeline] enrich failed: %s", e)
         return suggestion
 
 

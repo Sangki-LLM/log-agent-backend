@@ -164,16 +164,27 @@ async def create_fix_pr(server: Server, record: AnalysisRecord) -> str:
                 try:
                     _, blob_sha = await _get_file(client, owner, repo, file_path, server.git_branch, hdrs)
 
+                    # patched_content가 없으면 original_content + before→after 재시도
+                    if not patched_content:
+                        original_content = file_patch.get("original_content", "")
+                        before = file_patch.get("before", "")
+                        after = file_patch.get("after", "")
+                        if original_content and before and after:
+                            from app.api.v1.routes.webhook import _find_and_replace
+                            result = _find_and_replace(original_content, before, after)
+                            if result:
+                                patched_content = result
+                                logger.info("[github] patched_content computed at approval time for %s", file_path)
+
                     if patched_content:
-                        # 분석 시점에 이미 계산된 완성 파일 사용
                         await _commit_file(
                             client, owner, repo, file_path, patched_content, blob_sha,
                             branch_name, commit_message, hdrs,
                         )
                         patched = True
-                        logger.info("[github] patched file via patched_content: %s", file_path)
+                        logger.info("[github] patched file: %s", file_path)
                     else:
-                        logger.warning("[github] patched_content not available for %s — description-only PR", file_path)
+                        logger.warning("[github] patch failed for %s — description-only PR", file_path)
                 except Exception as e:
                     logger.warning("[github] file patch failed: %s", e)
 
