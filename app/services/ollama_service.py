@@ -160,6 +160,32 @@ async def _fallback_analyze(raw_log: str) -> str:
         return _strip_code_fence(raw)
 
 
+async def apply_patch_with_llm(original: str, before: str, after: str) -> str:
+    """original_content에 before→after 변경을 LLM이 직접 적용해 완성 파일 반환."""
+    prompt = (
+        "아래 파일에 코드 변경을 적용해줘. "
+        "설명 없이 변경이 적용된 파일 전체 내용만 반환해.\n\n"
+        f"=== 원본 파일 ===\n{original}\n\n"
+        f"=== 변경 전 (Before) ===\n{before}\n\n"
+        f"=== 변경 후 (After) ===\n{after}"
+    )
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=None, write=60.0, pool=5.0)
+    ) as client:
+        response = await client.post(
+            f"{settings.ollama_host}/api/chat",
+            json={
+                "model": settings.ollama_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "think": False,
+            },
+        )
+        response.raise_for_status()
+        content = response.json().get("message", {}).get("content", "")
+        return _strip_code_fence(content)
+
+
 async def stream_analysis(raw_log: str) -> AsyncGenerator[str, None]:
     prompt = f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```"
 

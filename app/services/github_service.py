@@ -164,17 +164,25 @@ async def create_fix_pr(server: Server, record: AnalysisRecord) -> str:
                 try:
                     _, blob_sha = await _get_file(client, owner, repo, file_path, server.git_branch, hdrs)
 
-                    # patched_content가 없으면 original_content + before→after 재시도
+                    # patched_content가 없으면 original_content 기반으로 재시도
                     if not patched_content:
                         original_content = file_patch.get("original_content", "")
                         before = file_patch.get("before", "")
                         after = file_patch.get("after", "")
                         if original_content and before and after:
+                            # 1차: fuzzy 매칭
                             from app.api.v1.routes.webhook import _find_and_replace
                             result = _find_and_replace(original_content, before, after)
                             if result:
                                 patched_content = result
-                                logger.info("[github] patched_content computed at approval time for %s", file_path)
+                                logger.info("[github] patched via fuzzy match at approval time: %s", file_path)
+                            else:
+                                # 2차: LLM에게 패치 적용 위임
+                                from app.services.ollama_service import apply_patch_with_llm
+                                result = await apply_patch_with_llm(original_content, before, after)
+                                if result:
+                                    patched_content = result
+                                    logger.info("[github] patched via LLM at approval time: %s", file_path)
 
                     if patched_content:
                         await _commit_file(
