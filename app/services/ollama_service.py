@@ -129,10 +129,75 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
 
     try:
         json.loads(raw)
-        return raw
     except json.JSONDecodeError:
         logger.warning("[agent] output is not valid JSON, falling back")
-        return await _fallback_analyze(raw_log)
+        raw = await _fallback_analyze(raw_log)
+
+    return await _self_reflect(raw, server_id)
+
+
+async def _self_reflect(suggestion: str, server_id: int) -> str:
+    """LLM이 제안한 before 코드가 실제 파일에 존재하는지 검증하고, 없으면 수정 요청."""
+    try:
+        data = json.loads(suggestion)
+    except json.JSONDecodeError:
+        return suggestion
+
+    fp = data.get("file_patch", {})
+    file_path = fp.get("file_path", "")
+    before = fp.get("before", "")
+    after = fp.get("after", "")
+    if not file_path or not before:
+        return suggestion
+
+    from app.services.git_service import _repo_path
+    try:
+        file_content = (_repo_path(server_id) / file_path).read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        logger.warning("[reflect] file not found: %s", file_path)
+        return suggestion
+
+    # before가 실제 파일에 있으면 검증 통과
+    norm = lambda s: s.replace("\r\n", "\n")
+    if norm(before) in norm(file_content):
+        logger.info("[reflect] before verified ✓ %s", file_path)
+        return suggestion
+
+    # before가 없으면 LLM에게 올바른 before 찾기 요청
+    logger.warning("[reflect] before not found — asking LLM to correct (%s)", file_path)
+    prompt = (
+        "아래 파일에서 수정 의도에 맞는 실제 코드를 찾아줘.\n\n"
+        f"=== 파일 내용 ===\n{file_content[:3000]}\n\n"
+        f"=== 수정 의도 ===\n"
+        f"before (파일에 없을 수 있음):\n{before}\n\n"
+        f"after:\n{after}\n\n"
+        "파일에서 before에 해당하는 실제 코드를 찾아 반환해줘.\n"
+        "응답은 JSON만: {\"before\": \"파일에 실제로 있는 코드\"}"
+    )
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=None, write=60.0, pool=5.0)
+    ) as client:
+        resp = await client.post(
+            f"{settings.ollama_host}/api/chat",
+            json={"model": settings.ollama_model,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "stream": False, "think": False},
+        )
+        resp.raise_for_status()
+        raw = _strip_code_fence(resp.json().get("message", {}).get("content", ""))
+
+    try:
+        corrected_before = json.loads(raw).get("before", "")
+        if corrected_before and norm(corrected_before) in norm(file_content):
+            data["file_patch"]["before"] = corrected_before
+            logger.info("[reflect] before corrected ✓")
+            return json.dumps(data, ensure_ascii=False)
+        logger.warning("[reflect] LLM correction also failed")
+    except (json.JSONDecodeError, AttributeError):
+        logger.warning("[reflect] reflection response not valid JSON")
+
+    return suggestion
 
 
 async def _fallback_analyze(raw_log: str) -> str:
