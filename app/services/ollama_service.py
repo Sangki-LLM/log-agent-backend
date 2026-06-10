@@ -129,11 +129,10 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
 
     try:
         json.loads(raw)
+        return raw
     except json.JSONDecodeError:
         logger.warning("[agent] output is not valid JSON, falling back")
-        raw = await _fallback_analyze(raw_log)
-
-    return await _self_reflect(raw, server_id)
+        return await _fallback_analyze(raw_log)
 
 
 async def _self_reflect(suggestion: str, server_id: int) -> str:

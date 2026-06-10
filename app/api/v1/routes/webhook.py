@@ -139,9 +139,9 @@ def _find_and_replace(original: str, before: str, after: str) -> str | None:
     return _fuzzy_replace(orig_lf, before_lf, after_lf)
 
 
-def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
-    """분석 시점에 원본 파일 전체를 original_content로 저장하고, 패치도 가능하면 즉시 계산.
-    승인 시에는 patched_content가 있으면 바로 사용, 없으면 original_content로 재시도.
+async def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
+    """분석 시점에 원본 파일을 저장하고, LLM으로 완성된 수정 파일을 생성해 저장.
+    승인 시에는 patched_content를 그대로 push — before/after 매칭 문제 없음.
     """
     try:
         data = json.loads(suggestion)
@@ -160,20 +160,25 @@ def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
             logger.warning("[pipeline] file not found — %s", full_path)
             return suggestion
 
-        # 원본 파일 전체를 항상 저장 (승인 시 패치 재시도 기반)
         data["file_patch"]["original_content"] = original
 
         if before and after:
+            # 1차: 빠른 string 매칭
             patched = _find_and_replace(original, before, after)
             if patched is not None:
-                data["file_patch"]["patched_content"] = patched
-                logger.info("[pipeline] patched_content computed for %s", file_path)
+                logger.info("[pipeline] patched via string match: %s", file_path)
             else:
-                logger.warning(
-                    "[pipeline] before not found in %s — will retry at approval time "
-                    "(before_head=%r)",
-                    file_path, before[:80],
-                )
+                # 2차: LLM이 원본 파일 전체를 보고 직접 수정 — 분석 시점에 미리 완료
+                logger.info("[pipeline] string match failed, calling LLM to patch: %s", file_path)
+                from app.services.ollama_service import apply_patch_with_llm
+                patched = await apply_patch_with_llm(original, before, after)
+                if patched:
+                    logger.info("[pipeline] patched via LLM: %s", file_path)
+                else:
+                    logger.warning("[pipeline] LLM patch also failed: %s", file_path)
+
+            if patched:
+                data["file_patch"]["patched_content"] = patched
 
         return json.dumps(data, ensure_ascii=False)
     except Exception as e:
@@ -214,7 +219,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
         try:
             suggestion = await ollama_service.analyze_log(server.id, raw_log, payload.stack_trace)
             logger.info("[pipeline] ollama response length=%d", len(suggestion or ""))
-            suggestion = _enrich_with_patched_content(suggestion, server.id)
+            suggestion = await _enrich_with_patched_content(suggestion, server.id)
         except Exception as e:
             logger.error("[pipeline] ollama failed: %s", e, exc_info=True)
             suggestion = ""
