@@ -1,9 +1,11 @@
 import json
 import logging
+import re
 from pathlib import Path
 
 import chromadb
 import httpx
+from rank_bm25 import BM25Okapi
 
 from app.core.config import settings
 
@@ -75,35 +77,64 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
     logger.info("[rag] index complete server=%s chunks=%d", server_id, len(chunks))
 
 
+def _tokenize(text: str) -> list[str]:
+    """영문·한글·숫자 토큰 추출 (소문자 정규화)."""
+    return re.findall(r"[A-Za-z가-힣0-9]+", text.lower())
+
+
 async def search_relevant_files(server_id: int, query: str, n_results: int = 5) -> list[str]:
-    """에러 쿼리와 의미적으로 유사한 파일 경로 반환 (벡터 검색)."""
+    """에러 쿼리와 관련된 파일 경로 반환 (벡터 검색 + BM25 하이브리드, RRF 융합)."""
     try:
         col = _collection(server_id)
         count = col.count()
         if count == 0:
             return []
 
+        candidates = min(n_results * 4, count)
+
+        # --- 벡터 검색 ---
         query_embeddings = await _embed([query[:2000]])
-        results = col.query(
+        vec_results = col.query(
             query_embeddings=query_embeddings,
-            n_results=min(n_results, count),
+            n_results=candidates,
+        )
+        vec_items: list[tuple[dict, str]] = list(
+            zip(vec_results["metadatas"][0], vec_results["documents"][0])
         )
 
-        all_docs = list(zip(results["metadatas"][0], results["documents"][0]))
-        if not all_docs:
-            return []
+        # --- BM25 검색 ---
+        all_data = col.get(limit=min(count, 2000), include=["documents", "metadatas"])
+        all_docs: list[str] = all_data["documents"]
+        all_metas: list[dict] = all_data["metadatas"]
+
+        tokenized_corpus = [_tokenize(doc) for doc in all_docs]
+        bm25 = BM25Okapi(tokenized_corpus)
+        bm25_scores = bm25.get_scores(_tokenize(query))
+        bm25_top_idx = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:candidates]
+        bm25_items: list[tuple[dict, str]] = [(all_metas[i], all_docs[i]) for i in bm25_top_idx]
+
+        # --- RRF 융합 (k=60) ---
+        K = 60
+        rrf: dict[str, float] = {}
+        for rank, (meta, _) in enumerate(vec_items):
+            path = meta["path"]
+            rrf[path] = rrf.get(path, 0.0) + 1 / (K + rank + 1)
+        for rank, (meta, _) in enumerate(bm25_items):
+            path = meta["path"]
+            rrf[path] = rrf.get(path, 0.0) + 1 / (K + rank + 1)
+
+        sorted_paths = sorted(rrf, key=lambda p: rrf[p], reverse=True)
 
         seen: set[str] = set()
         paths: list[str] = []
-        for meta, _ in all_docs:
-            path = meta["path"]
+        for path in sorted_paths:
             if path not in seen:
                 seen.add(path)
                 paths.append(path)
             if len(paths) >= n_results:
                 break
 
-        logger.info("[rag] search returned %s", paths)
+        logger.info("[rag] hybrid search returned %s", paths)
         return paths
     except Exception as e:
         logger.warning("[rag] search failed: %s", e)
