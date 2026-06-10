@@ -21,20 +21,20 @@ _TEST_CASES = [
         expected_files=["src/main/java/com/puppynoteserver/global/TestErrorController.java"],
     ),
     TestCase(
-        name="NoSuchElementException in UserService",
+        name="NoSuchElementException in UserServiceImpl",
         stack_trace=(
             "java.util.NoSuchElementException: User not found\n"
-            "\tat com.puppynoteserver.domain.user.service.UserService.findById(UserService.java:34)"
+            "\tat com.puppynoteserver.user.users.service.impl.UserServiceImpl.findById(UserServiceImpl.java:34)"
         ),
-        expected_files=["src/main/java/com/puppynoteserver/domain/user/service/UserService.java"],
+        expected_files=["src/main/java/com/puppynoteserver/user/users/service/impl/UserServiceImpl.java"],
     ),
     TestCase(
-        name="DataIntegrityViolationException in PostService",
+        name="DataIntegrityViolationException in CommunityPostWriteService",
         stack_trace=(
             "org.springframework.dao.DataIntegrityViolationException: could not execute statement\n"
-            "\tat com.puppynoteserver.domain.post.service.PostService.create(PostService.java:52)"
+            "\tat com.puppynoteserver.community.post.service.impl.CommunityPostWriteServiceImpl.create(CommunityPostWriteServiceImpl.java:52)"
         ),
-        expected_files=["src/main/java/com/puppynoteserver/domain/post/service/PostService.java"],
+        expected_files=["src/main/java/com/puppynoteserver/community/post/service/impl/CommunityPostWriteServiceImpl.java"],
     ),
 ]
 
