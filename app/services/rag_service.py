@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 import chromadb
@@ -27,6 +28,13 @@ def _client():
 def _collection(server_id: int):
     return _client().get_or_create_collection(
         name=f"server_{server_id}",
+        metadata={"hnsw:space": "cosine"},
+    )
+
+
+def _memory_collection(server_id: int):
+    return _client().get_or_create_collection(
+        name=f"memory_{server_id}",
         metadata={"hnsw:space": "cosine"},
     )
 
@@ -174,6 +182,46 @@ def expand_with_graph(server_id: int, paths: list[str], depth: int = 1) -> list[
                     expanded.append(dep)
                     seen.add(dep)
     return expanded
+
+
+# ── Error Memory ─────────────────────────────────────────────────────────────
+
+async def store_error_memory(server_id: int, error_query: str, analysis: str) -> None:
+    """에러 분석 결과를 메모리 컬렉션에 저장한다."""
+    try:
+        embeddings = await _embed([error_query[:2000]])
+        col = _memory_collection(server_id)
+        doc_id = f"mem_{int(time.time() * 1000)}"
+        col.upsert(
+            ids=[doc_id],
+            documents=[error_query[:2000]],
+            embeddings=embeddings,
+            metadatas=[{"analysis": analysis[:3000], "timestamp": str(int(time.time()))}],
+        )
+        logger.info("[memory] stored id=%s server=%s", doc_id, server_id)
+    except Exception as e:
+        logger.warning("[memory] store failed: %s", e)
+
+
+async def search_error_memory(server_id: int, query: str, n_results: int = 3) -> list[dict]:
+    """과거 유사 에러 분석 사례를 검색한다."""
+    try:
+        col = _memory_collection(server_id)
+        count = col.count()
+        if count == 0:
+            return []
+        embeddings = await _embed([query[:2000]])
+        results = col.query(
+            query_embeddings=embeddings,
+            n_results=min(n_results, count),
+        )
+        return [
+            {"error": doc, "analysis": meta.get("analysis", "")}
+            for doc, meta in zip(results["documents"][0], results["metadatas"][0])
+        ]
+    except Exception as e:
+        logger.warning("[memory] search failed: %s", e)
+        return []
 
 
 # ── 인덱싱 ───────────────────────────────────────────────────────────────────

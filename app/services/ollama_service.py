@@ -98,9 +98,21 @@ def _make_search_tool(server_id: int, repo_path: Path):
 
 async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> str:
     from app.services.git_service import _repo_path
+    from app.services import rag_service
 
     repo_path = _repo_path(server_id)
     tools = [_make_search_tool(server_id, repo_path)]
+
+    # Error Memory: 과거 유사 에러 사례 조회
+    past_cases = await rag_service.search_error_memory(server_id, raw_log[:1000])
+    system_prompt = SYSTEM_PROMPT
+    if past_cases:
+        cases_text = "\n\n".join(
+            f"[과거 사례 {i+1}]\n에러: {c['error'][:300]}\n분석 요약: {c['analysis'][:500]}"
+            for i, c in enumerate(past_cases)
+        )
+        system_prompt = f"{SYSTEM_PROMPT}\n\n=== 과거 유사 에러 사례 (참고용) ===\n{cases_text}"
+        logger.info("[agent] injected %d past cases into prompt", len(past_cases))
 
     llm = ChatOllama(
         model=settings.ollama_model,
@@ -108,7 +120,7 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
         think=False,
     )
 
-    graph = create_react_agent(model=llm, tools=tools, prompt=SYSTEM_PROMPT)
+    graph = create_react_agent(model=llm, tools=tools, prompt=system_prompt)
 
     try:
         result = await asyncio.wait_for(
@@ -129,6 +141,8 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
 
     try:
         json.loads(raw)
+        # Error Memory: 분석 결과 저장
+        await rag_service.store_error_memory(server_id, raw_log[:1000], raw)
         return raw
     except json.JSONDecodeError:
         logger.warning("[agent] output is not valid JSON, falling back")
