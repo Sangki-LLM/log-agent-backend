@@ -16,6 +16,7 @@ services:
       REPOS_PATH: /app/repos
       PUBLIC_URL: ${PUBLIC_URL}
       FRONTEND_URL: ${FRONTEND_URL}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
       CHROMA_HOST: chromadb
       CHROMA_PORT: 8000
     depends_on:
