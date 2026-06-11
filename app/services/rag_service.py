@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -11,10 +12,12 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# 인덱스 상태는 repos 볼륨에 저장 (컨테이너 재시작 후에도 유지)
 _STATE_FILE = Path(settings.repos_path) / "index_state.json"
 _BATCH_SIZE = 50
+_CONTEXT_SEMAPHORE = asyncio.Semaphore(5)  # Ollama 동시 호출 제한
 
+
+# ── ChromaDB 클라이언트 ──────────────────────────────────────────────────────
 
 def _client():
     return chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
@@ -26,6 +29,8 @@ def _collection(server_id: int):
         metadata={"hnsw:space": "cosine"},
     )
 
+
+# ── 상태 관리 ────────────────────────────────────────────────────────────────
 
 def _load_state() -> dict:
     if _STATE_FILE.exists():
@@ -42,6 +47,8 @@ def is_indexed(server_id: int, commit_hash: str) -> bool:
     return _load_state().get(str(server_id)) == commit_hash
 
 
+# ── 임베딩 ───────────────────────────────────────────────────────────────────
+
 async def _embed(texts: list[str]) -> list[list[float]]:
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
@@ -52,31 +59,76 @@ async def _embed(texts: list[str]) -> list[list[float]]:
         return resp.json()["embeddings"]
 
 
+# ── Contextual RAG: 청크에 컨텍스트 요약 부착 ────────────────────────────────
+
+async def _contextualize_chunk(path: str, content: str) -> str:
+    """LLM으로 청크의 역할을 한 문장으로 요약해 원본 앞에 붙인다."""
+    prompt = (
+        f"파일: {path}\n코드:\n{content[:800]}\n\n"
+        "이 코드의 역할을 한 문장으로 설명해줘. 클래스명/메서드명/주요 기능을 포함해. "
+        "설명만 출력하고 다른 말은 하지 마."
+    )
+    async with _CONTEXT_SEMAPHORE:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+            ) as client:
+                resp = await client.post(
+                    f"{settings.ollama_host}/api/chat",
+                    json={
+                        "model": settings.ollama_model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                        "think": False,
+                    },
+                )
+                resp.raise_for_status()
+                summary = resp.json().get("message", {}).get("content", "").strip()
+                return f"{summary}\n\n{content}"
+        except Exception as e:
+            logger.warning("[rag] context generation failed for %s: %s", path, e)
+            return content
+
+
+async def _contextualize_all(chunks: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """모든 청크에 컨텍스트를 병렬로 생성한다."""
+    logger.info("[rag] generating context for %d chunks", len(chunks))
+    tasks = [_contextualize_chunk(path, content) for path, content in chunks]
+    contextualized = await asyncio.gather(*tasks)
+    logger.info("[rag] context generation complete")
+    return [(path, ctx) for (path, _), ctx in zip(chunks, contextualized)]
+
+
+# ── 인덱싱 ───────────────────────────────────────────────────────────────────
+
 async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, str]]) -> None:
     if not chunks:
         return
 
     logger.info("[rag] indexing %d chunks server=%s commit=%s", len(chunks), server_id, commit_hash[:8])
 
+    # Contextual RAG: 청크에 컨텍스트 요약 부착
+    ctx_chunks = await _contextualize_all(chunks)
+
     all_embeddings: list[list[float]] = []
-    for i in range(0, len(chunks), _BATCH_SIZE):
-        batch = [content for _, content in chunks[i:i + _BATCH_SIZE]]
+    for i in range(0, len(ctx_chunks), _BATCH_SIZE):
+        batch = [content for _, content in ctx_chunks[i:i + _BATCH_SIZE]]
         embeddings = await _embed(batch)
         all_embeddings.extend(embeddings)
-        logger.info("[rag] embedded %d/%d chunks", min(i + _BATCH_SIZE, len(chunks)), len(chunks))
+        logger.info("[rag] embedded %d/%d chunks", min(i + _BATCH_SIZE, len(ctx_chunks)), len(ctx_chunks))
 
-    client = _client()
+    chroma = _client()
     collection_name = f"server_{server_id}"
     try:
-        client.delete_collection(collection_name)
+        chroma.delete_collection(collection_name)
     except Exception:
         pass
-    col = client.create_collection(collection_name, metadata={"hnsw:space": "cosine"})
+    col = chroma.create_collection(collection_name, metadata={"hnsw:space": "cosine"})
     col.add(
-        ids=[f"{path}__chunk{i}" for i, (path, _) in enumerate(chunks)],
-        documents=[content for _, content in chunks],
+        ids=[f"{path}__chunk{i}" for i, (path, _) in enumerate(ctx_chunks)],
+        documents=[content for _, content in ctx_chunks],
         embeddings=all_embeddings,
-        metadatas=[{"path": path, "commit": commit_hash} for path, _ in chunks],
+        metadatas=[{"path": path, "commit": commit_hash} for path, _ in ctx_chunks],
     )
 
     state = _load_state()
@@ -86,8 +138,9 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
     logger.info("[rag] index complete server=%s chunks=%d", server_id, len(chunks))
 
 
+# ── 검색 ─────────────────────────────────────────────────────────────────────
+
 def _tokenize(text: str) -> list[str]:
-    """영문·한글·숫자 토큰 추출 (소문자 정규화)."""
     return re.findall(r"[A-Za-z가-힣0-9]+", text.lower())
 
 
