@@ -16,9 +16,12 @@ _STATE_FILE = Path(settings.repos_path) / "index_state.json"
 _BATCH_SIZE = 50
 
 
+def _client():
+    return chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
+
+
 def _collection(server_id: int):
-    client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
-    return client.get_or_create_collection(
+    return _client().get_or_create_collection(
         name=f"server_{server_id}",
         metadata={"hnsw:space": "cosine"},
     )
@@ -62,8 +65,14 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
         all_embeddings.extend(embeddings)
         logger.info("[rag] embedded %d/%d chunks", min(i + _BATCH_SIZE, len(chunks)), len(chunks))
 
-    col = _collection(server_id)
-    col.upsert(
+    client = _client()
+    collection_name = f"server_{server_id}"
+    try:
+        client.delete_collection(collection_name)
+    except Exception:
+        pass
+    col = client.create_collection(collection_name, metadata={"hnsw:space": "cosine"})
+    col.add(
         ids=[f"{path}__chunk{i}" for i, (path, _) in enumerate(chunks)],
         documents=[content for _, content in chunks],
         embeddings=all_embeddings,
