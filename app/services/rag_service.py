@@ -52,7 +52,10 @@ def _save_state(state: dict) -> None:
 
 
 def is_indexed(server_id: int, commit_hash: str) -> bool:
-    return _load_state().get(str(server_id)) == commit_hash
+    if _load_state().get(str(server_id)) != commit_hash:
+        return False
+    # 그래프가 없으면 재인덱싱 필요 (Graph RAG 신규 도입 등)
+    return bool(_load_graph(server_id))
 
 
 # ── 임베딩 ───────────────────────────────────────────────────────────────────
