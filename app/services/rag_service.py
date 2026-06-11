@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 _STATE_FILE = Path(settings.repos_path) / "index_state.json"
 _GRAPH_FILE = Path(settings.repos_path) / "dependency_graph.json"
 _BATCH_SIZE = 50
-_CONTEXT_SEMAPHORE = asyncio.Semaphore(5)
 
 
 # ── ChromaDB 클라이언트 ──────────────────────────────────────────────────────
@@ -66,46 +65,6 @@ async def _embed(texts: list[str]) -> list[list[float]]:
         )
         resp.raise_for_status()
         return resp.json()["embeddings"]
-
-
-# ── Contextual RAG: 청크에 컨텍스트 요약 부착 ────────────────────────────────
-
-async def _contextualize_chunk(path: str, content: str) -> str:
-    """LLM으로 청크의 역할을 한 문장으로 요약해 원본 앞에 붙인다."""
-    prompt = (
-        f"파일: {path}\n코드:\n{content[:800]}\n\n"
-        "이 코드의 역할을 한 문장으로 설명해줘. 클래스명/메서드명/주요 기능을 포함해. "
-        "설명만 출력하고 다른 말은 하지 마."
-    )
-    async with _CONTEXT_SEMAPHORE:
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
-            ) as client:
-                resp = await client.post(
-                    f"{settings.ollama_host}/api/chat",
-                    json={
-                        "model": settings.ollama_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False,
-                        "think": False,
-                    },
-                )
-                resp.raise_for_status()
-                summary = resp.json().get("message", {}).get("content", "").strip()
-                return f"{summary}\n\n{content}"
-        except Exception as e:
-            logger.warning("[rag] context generation failed for %s: %s", path, e)
-            return content
-
-
-async def _contextualize_all(chunks: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """모든 청크에 컨텍스트를 병렬로 생성한다."""
-    logger.info("[rag] generating context for %d chunks", len(chunks))
-    tasks = [_contextualize_chunk(path, content) for path, content in chunks]
-    contextualized = await asyncio.gather(*tasks)
-    logger.info("[rag] context generation complete")
-    return [(path, ctx) for (path, _), ctx in zip(chunks, contextualized)]
 
 
 # ── Graph RAG: 의존성 그래프 ─────────────────────────────────────────────────
@@ -232,20 +191,17 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
 
     logger.info("[rag] indexing %d chunks server=%s commit=%s", len(chunks), server_id, commit_hash[:8])
 
-    # Contextual RAG: 청크에 컨텍스트 요약 부착
-    ctx_chunks = await _contextualize_all(chunks)
-
-    # Graph RAG: 의존성 그래프 구성 (원본 청크 기준)
+    # Graph RAG: 의존성 그래프 구성
     graph = _build_dependency_graph(chunks)
     _save_graph(server_id, graph)
     logger.info("[rag] dependency graph built: %d files", len(graph))
 
     all_embeddings: list[list[float]] = []
-    for i in range(0, len(ctx_chunks), _BATCH_SIZE):
-        batch = [content for _, content in ctx_chunks[i:i + _BATCH_SIZE]]
+    for i in range(0, len(chunks), _BATCH_SIZE):
+        batch = [content for _, content in chunks[i:i + _BATCH_SIZE]]
         embeddings = await _embed(batch)
         all_embeddings.extend(embeddings)
-        logger.info("[rag] embedded %d/%d chunks", min(i + _BATCH_SIZE, len(ctx_chunks)), len(ctx_chunks))
+        logger.info("[rag] embedded %d/%d chunks", min(i + _BATCH_SIZE, len(chunks)), len(chunks))
 
     chroma = _client()
     collection_name = f"server_{server_id}"
@@ -255,10 +211,10 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
         pass
     col = chroma.create_collection(collection_name, metadata={"hnsw:space": "cosine"})
     col.add(
-        ids=[f"{path}__chunk{i}" for i, (path, _) in enumerate(ctx_chunks)],
-        documents=[content for _, content in ctx_chunks],
+        ids=[f"{path}__chunk{i}" for i, (path, _) in enumerate(chunks)],
+        documents=[content for _, content in chunks],
         embeddings=all_embeddings,
-        metadatas=[{"path": path, "commit": commit_hash} for path, _ in ctx_chunks],
+        metadatas=[{"path": path, "commit": commit_hash} for path, _ in chunks],
     )
 
     state = _load_state()
