@@ -43,6 +43,9 @@ class AnalysisRecord(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     slack_ts: Mapped[str] = mapped_column(String(50), nullable=True)
     github_pr_url: Mapped[str] = mapped_column(String(500), nullable=True)
+    judge_score: Mapped[int] = mapped_column(Integer, nullable=True)
+    judge_confidence: Mapped[str] = mapped_column(String(20), nullable=True)
+    judge_reason: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     server: Mapped["Server"] = relationship(back_populates="records")

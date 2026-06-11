@@ -13,6 +13,23 @@ def _webhook_url(server: Server) -> str:
     return server.slack_webhook_url or settings.slack_webhook_url
 
 
+def _build_judge_block(record: AnalysisRecord) -> dict:
+    score = record.judge_score or 0
+    filled = "⭐" * score + "☆" * (5 - score)
+    confidence_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(record.judge_confidence or "", "⚪")
+    return {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                f"*🤖 Gemini Judge*\n"
+                f"{filled} ({score}/5)  {confidence_emoji} {record.judge_confidence}\n"
+                f"_{record.judge_reason}_"
+            ),
+        },
+    }
+
+
 def _build_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
     try:
         suggestion = json.loads(record.llm_suggestion or "{}")
@@ -56,6 +73,7 @@ def _build_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
                 "text": f"*추천 수정 코드*\n{fix_code}",
             },
         },
+        *( [_build_judge_block(record)] if record.judge_score else [] ),
         {"type": "divider"},
         {
             "type": "actions",

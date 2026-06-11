@@ -37,7 +37,9 @@ async def _migrate(conn) -> None:
     new_columns = [
         "ALTER TABLE analysis_records ADD COLUMN github_pr_url VARCHAR(500)",
         "ALTER TABLE servers ADD COLUMN slack_webhook_url VARCHAR(500)",
-        # eval 테이블은 create_all로 자동 생성되므로 별도 마이그레이션 불필요
+        "ALTER TABLE analysis_records ADD COLUMN judge_score INT",
+        "ALTER TABLE analysis_records ADD COLUMN judge_confidence VARCHAR(20)",
+        "ALTER TABLE analysis_records ADD COLUMN judge_reason TEXT",
     ]
     for stmt in new_columns:
         try:

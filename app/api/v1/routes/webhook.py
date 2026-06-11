@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.server import AnalysisRecord, Server, ServerHost
 from app.schemas.server import ErrorEventPayload
-from app.services import ollama_service, slack_service
+from app.services import judge_service, ollama_service, slack_service
 
 logger = logging.getLogger(__name__)
 
@@ -224,12 +224,26 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
             logger.error("[pipeline] ollama failed: %s", e, exc_info=True)
             suggestion = ""
 
+        # LLM Judge: Gemini로 분석 결과 품질 평가
+        judge_result = None
+        if suggestion:
+            try:
+                judge_result = await judge_service.judge_fix(raw_log, suggestion)
+                if judge_result:
+                    logger.info("[pipeline] judge score=%d confidence=%s",
+                                judge_result["score"], judge_result["confidence"])
+            except Exception as e:
+                logger.warning("[pipeline] judge failed: %s", e)
+
         record = AnalysisRecord(
             server_id=server.id,
             trigger_line=trigger_line,
             raw_log=raw_log[:10000],
             llm_suggestion=suggestion,
             status="pending",
+            judge_score=judge_result["score"] if judge_result else None,
+            judge_confidence=judge_result["confidence"] if judge_result else None,
+            judge_reason=judge_result["reason"] if judge_result else None,
         )
         db.add(record)
         await db.commit()
