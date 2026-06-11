@@ -13,8 +13,9 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _STATE_FILE = Path(settings.repos_path) / "index_state.json"
+_GRAPH_FILE = Path(settings.repos_path) / "dependency_graph.json"
 _BATCH_SIZE = 50
-_CONTEXT_SEMAPHORE = asyncio.Semaphore(5)  # Ollama 동시 호출 제한
+_CONTEXT_SEMAPHORE = asyncio.Semaphore(5)
 
 
 # ── ChromaDB 클라이언트 ──────────────────────────────────────────────────────
@@ -99,6 +100,82 @@ async def _contextualize_all(chunks: list[tuple[str, str]]) -> list[tuple[str, s
     return [(path, ctx) for (path, _), ctx in zip(chunks, contextualized)]
 
 
+# ── Graph RAG: 의존성 그래프 ─────────────────────────────────────────────────
+
+_IMPORT_PATTERNS: dict[str, str] = {
+    ".java": r"^import\s+[\w.]+\.(\w+);",
+    ".kt":   r"^import\s+[\w.]+\.(\w+)",
+    ".py":   r"^(?:from\s+[\w.]+\s+import\s+([\w, ]+)|import\s+([\w.]+))",
+    ".ts":   r'from\s+[\'"]([./][\w./@-]+)[\'"]',
+    ".tsx":  r'from\s+[\'"]([./][\w./@-]+)[\'"]',
+    ".js":   r'from\s+[\'"]([./][\w./@-]+)[\'"]',
+    ".go":   r'"([\w./\-]+)"',
+}
+
+
+def _extract_symbol_names(path: str, content: str) -> list[str]:
+    ext = Path(path).suffix.lower()
+    pattern = _IMPORT_PATTERNS.get(ext, "")
+    if not pattern:
+        return []
+    matches = re.findall(pattern, content, re.MULTILINE)
+    symbols = []
+    for m in matches:
+        if isinstance(m, tuple):
+            symbols.extend(p.strip() for p in m if p.strip())
+        else:
+            symbols.append(Path(m).stem)
+    return [s for s in symbols if s and len(s) > 1]
+
+
+def _build_dependency_graph(chunks: list[tuple[str, str]]) -> dict[str, list[str]]:
+    stem_index: dict[str, str] = {Path(path).stem.lower(): path for path, _ in chunks}
+    graph: dict[str, list[str]] = {}
+    for path, content in chunks:
+        deps: set[str] = set()
+        for sym in _extract_symbol_names(path, content):
+            target = stem_index.get(sym.lower())
+            if target and target != path:
+                deps.add(target)
+        graph[path] = list(deps)
+    return graph
+
+
+def _save_graph(server_id: int, graph: dict[str, list[str]]) -> None:
+    data: dict = {}
+    try:
+        if _GRAPH_FILE.exists():
+            data = json.loads(_GRAPH_FILE.read_text())
+    except Exception:
+        pass
+    data[str(server_id)] = graph
+    _GRAPH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _GRAPH_FILE.write_text(json.dumps(data))
+
+
+def _load_graph(server_id: int) -> dict[str, list[str]]:
+    try:
+        if _GRAPH_FILE.exists():
+            return json.loads(_GRAPH_FILE.read_text()).get(str(server_id), {})
+    except Exception:
+        pass
+    return {}
+
+
+def expand_with_graph(server_id: int, paths: list[str], depth: int = 1) -> list[str]:
+    """검색된 파일에서 의존 파일을 depth만큼 탐색해 결과를 확장한다."""
+    graph = _load_graph(server_id)
+    expanded = list(paths)
+    seen = set(paths)
+    for _ in range(depth):
+        for path in list(seen):
+            for dep in graph.get(path, []):
+                if dep not in seen:
+                    expanded.append(dep)
+                    seen.add(dep)
+    return expanded
+
+
 # ── 인덱싱 ───────────────────────────────────────────────────────────────────
 
 async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, str]]) -> None:
@@ -109,6 +186,11 @@ async def index_repo(server_id: int, commit_hash: str, chunks: list[tuple[str, s
 
     # Contextual RAG: 청크에 컨텍스트 요약 부착
     ctx_chunks = await _contextualize_all(chunks)
+
+    # Graph RAG: 의존성 그래프 구성 (원본 청크 기준)
+    graph = _build_dependency_graph(chunks)
+    _save_graph(server_id, graph)
+    logger.info("[rag] dependency graph built: %d files", len(graph))
 
     all_embeddings: list[list[float]] = []
     for i in range(0, len(ctx_chunks), _BATCH_SIZE):
@@ -145,7 +227,7 @@ def _tokenize(text: str) -> list[str]:
 
 
 async def search_relevant_files(server_id: int, query: str, n_results: int = 5) -> list[str]:
-    """에러 쿼리와 관련된 파일 경로 반환 (벡터 검색 + BM25 하이브리드, RRF 융합)."""
+    """에러 쿼리와 관련된 파일 경로 반환 (벡터 + BM25 하이브리드 → RRF → Graph 확장)."""
     try:
         col = _collection(server_id)
         count = col.count()
@@ -175,7 +257,7 @@ async def search_relevant_files(server_id: int, query: str, n_results: int = 5) 
         bm25_top_idx = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:candidates]
         bm25_items: list[tuple[dict, str]] = [(all_metas[i], all_docs[i]) for i in bm25_top_idx]
 
-        # --- RRF 융합 (k=60) ---
+        # --- RRF 융합 ---
         K = 60
         rrf: dict[str, float] = {}
         for rank, (meta, _) in enumerate(vec_items):
@@ -188,16 +270,19 @@ async def search_relevant_files(server_id: int, query: str, n_results: int = 5) 
         sorted_paths = sorted(rrf, key=lambda p: rrf[p], reverse=True)
 
         seen: set[str] = set()
-        paths: list[str] = []
+        rrf_paths: list[str] = []
         for path in sorted_paths:
             if path not in seen:
                 seen.add(path)
-                paths.append(path)
-            if len(paths) >= n_results:
+                rrf_paths.append(path)
+            if len(rrf_paths) >= n_results:
                 break
 
-        logger.info("[rag] hybrid search returned %s", paths)
-        return paths
+        # --- Graph RAG: 의존 파일 확장 ---
+        paths = expand_with_graph(server_id, rrf_paths, depth=1)
+
+        logger.info("[rag] hybrid+graph search returned %s", paths)
+        return paths[:n_results + 3]
     except Exception as e:
         logger.warning("[rag] search failed: %s", e)
         return []
