@@ -190,7 +190,7 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
     import asyncio
 
     from app.core.database import AsyncSessionLocal
-    from app.services import git_service, rag_service
+    from app.services import git_service
 
     print(f"[pipeline] start — server={server.name} error={payload.error_type}", flush=True)
     logger.info("[pipeline] start — server=%s error=%s", server.name, payload.error_type)
@@ -207,11 +207,6 @@ async def _analysis_pipeline(server: Server, payload: ErrorEventPayload) -> None
             commit = await asyncio.to_thread(git_service.get_remote_head, server.id, server.git_branch)
             logger.info("[pipeline] remote HEAD=%s", commit)
 
-            # RAG: commit이 바뀐 경우 전체 소스 재인덱싱
-            if not rag_service.is_indexed(server.id, commit):
-                logger.info("[pipeline] RAG indexing start")
-                chunks = await asyncio.to_thread(git_service.list_all_files_at_commit, server.id, commit)
-                await rag_service.index_repo(server.id, commit, chunks)
         except Exception as e:
             logger.warning("[pipeline] git/rag step failed: %s", e, exc_info=True)
 
