@@ -244,7 +244,7 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
                 {"messages": [("user", user_message)]},
                 config={"recursion_limit": 30},
             ),
-            timeout=120,
+            timeout=300,
         )
         raw = _strip_code_fence(result["messages"][-1].content)
         logger.info("[agent] done, content_len=%d", len(raw))
