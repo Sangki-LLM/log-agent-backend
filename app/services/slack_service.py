@@ -41,9 +41,15 @@ def _build_blocks(server: Server, record: AnalysisRecord) -> list[dict]:
     fix_explanation = suggestion.get("suggested_fix", "")
     file_patch = suggestion.get("file_patch", {})
     patch_path = file_patch.get("file_path", "")
+    patch_before = file_patch.get("before", "")
     patch_after = file_patch.get("after", "")
-    if patch_after:
-        fix_code = f"{fix_explanation}\n\n`{patch_path}`\n```\n{patch_after}\n```"[:2800]
+    if patch_path and patch_after:
+        fix_code = (
+            f"{fix_explanation}\n\n"
+            f"`{patch_path}`\n"
+            f"*Before*\n```\n{patch_before.strip()}\n```\n"
+            f"*After*\n```\n{patch_after.strip()}\n```"
+        )[:2800]
     else:
         fix_code = (fix_explanation or record.llm_suggestion or "")[:1200]
 
