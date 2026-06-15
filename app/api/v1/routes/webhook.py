@@ -153,12 +153,23 @@ async def _enrich_with_patched_content(suggestion: str, server_id: int) -> str:
             return suggestion
 
         from app.services.git_service import _repo_path
-        full_path = _repo_path(server_id) / file_path
+        repo_root = _repo_path(server_id)
+        full_path = repo_root / file_path
         try:
             original = full_path.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
-            logger.warning("[pipeline] file not found — %s", full_path)
-            return suggestion
+            # LLM이 경로를 잘못 변환한 경우 파일명으로 repo 전체 검색
+            file_name = Path(file_path).name
+            matches = list(repo_root.rglob(file_name))
+            if len(matches) == 1:
+                full_path = matches[0]
+                file_path = full_path.relative_to(repo_root).as_posix()
+                data["file_patch"]["file_path"] = file_path
+                original = full_path.read_text(encoding="utf-8", errors="replace")
+                logger.info("[pipeline] file found via search: %s", file_path)
+            else:
+                logger.warning("[pipeline] file not found — %s (candidates=%d)", full_path, len(matches))
+                return suggestion
 
         data["file_patch"]["original_content"] = original
 
