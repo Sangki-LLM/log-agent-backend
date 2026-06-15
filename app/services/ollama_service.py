@@ -69,46 +69,6 @@ _ANALYSIS_SCHEMA = {
 }
 
 
-def _preprocess_log(raw_log: str) -> tuple[str, list[str]]:
-    """에러 로그에서 SQL·파라미터 제거 후 핵심 메시지와 파일 경로 힌트 반환."""
-    # SQL/파라미터 섹션 이전까지만 유지
-    key_lines: list[str] = []
-    for line in raw_log.split("\n"):
-        if re.match(r"###\s*(SQL|Parameters|Cause at):", line):
-            break
-        key_lines.append(line)
-    key_log = "\n".join(key_lines)[:2000]
-
-    # 파일 경로 힌트 추출
-    hints: list[str] = []
-
-    # MyBatis: file [C:\...\build\resources\main\mapper\...\Foo.xml]
-    for m in re.finditer(
-        r"file \[.*?[/\\]((?:src|mapper|resources)[^\]]*\.(?:java|kt|xml|properties|yml|yaml))\]",
-        raw_log,
-    ):
-        path = m.group(1).replace("\\", "/")
-        path = re.sub(r"build/resources/main/", "src/main/resources/", path)
-        hints.append(path)
-
-    # Java stack trace: at com.example.Foo.method(Foo.java:123)
-    for m in re.finditer(r"at ([\w$.]+)\.\w+\((\w+\.(?:java|kt)):\d+\)", raw_log):
-        pkg = m.group(1).split("$")[0].rsplit(".", 1)[0].replace(".", "/")
-        hints.append(f"src/main/java/{pkg}/{m.group(2)}")
-
-    # 중복 제거, 최대 3개
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for h in hints:
-        if h not in seen:
-            seen.add(h)
-            deduped.append(h)
-        if len(deduped) >= 3:
-            break
-
-    return key_log, deduped
-
-
 def _strip_code_fence(text: str) -> str:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -229,14 +189,8 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
 
     graph = create_react_agent(model=llm, tools=tools, prompt=system_prompt)
 
-    key_log, file_hints = _preprocess_log(raw_log)
-    hint_text = ""
-    if file_hints:
-        hint_text = "\n\n파일 경로 힌트 (grep_files 또는 read_file로 바로 확인):\n" + "\n".join(
-            f"- {h}" for h in file_hints
-        )
-    user_message = f"다음 에러 로그를 분석해줘:\n\n```\n{key_log}\n```{hint_text}"
-    logger.info("[agent] user_message len=%d file_hints=%s", len(user_message), file_hints)
+    user_message = f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:4000]}\n```"
+    logger.info("[agent] user_message len=%d", len(user_message))
 
     try:
         result = await asyncio.wait_for(
@@ -332,11 +286,7 @@ async def _self_reflect(suggestion: str, server_id: int) -> str:
 async def _fallback_analyze(raw_log: str) -> str:
     """에이전트 결과가 유효한 JSON이 아닐 때 structured output으로 재시도."""
     logger.info("[agent] fallback with structured output")
-    key_log, file_hints = _preprocess_log(raw_log)
-    hint_text = ""
-    if file_hints:
-        hint_text = "\n\n파일 경로 힌트:\n" + "\n".join(f"- {h}" for h in file_hints)
-    user_content = f"다음 에러 로그를 분석해줘:\n\n```\n{key_log}\n```{hint_text}"
+    user_content = f"다음 에러 로그를 분석해줘:\n\n```\n{raw_log[:3000]}\n```"
 
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=5.0)
