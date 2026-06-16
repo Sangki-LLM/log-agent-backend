@@ -88,7 +88,7 @@ def _safe_path(repo_path: Path, rel: str) -> Path | None:
     return target if str(target).startswith(str(repo_path.resolve())) else None
 
 
-def _make_file_tools(server_id: int, repo_path: Path):
+def _make_file_tools(repo_path: Path):
     @langchain_tool
     async def grep_files(pattern: str, path: str = "", file_extension: str = "") -> str:
         """레포지토리에서 클래스명·메서드명·패턴을 검색해 파일 경로와 매칭 라인을 반환합니다."""
@@ -164,74 +164,65 @@ def _make_file_tools(server_id: int, repo_path: Path):
 
 
 async def patch_file_with_agent(server_id: int, suggestion: dict) -> tuple[str, str] | None:
-    """에이전트가 파일을 직접 읽고 수정을 적용해 (file_path, patched_content) 반환. 실패 시 None."""
+    """로컬 파일을 직접 읽고 LLM 단일 호출로 수정 적용. (file_path, patched_content) 반환."""
     file_patch = suggestion.get("file_patch", {})
     file_path = file_patch.get("file_path", "")
     before = file_patch.get("before", "")
     after = file_patch.get("after", "")
-    error_cause = suggestion.get("error_cause", "")
-    suggested_fix = suggestion.get("suggested_fix", "")
 
     if not file_path or not before or not after:
+        return None
+    if not settings.gemini_api_key:
+        logger.warning("[patch] gemini_api_key not set, skipping")
         return None
 
     from app.services.git_service import _repo_path
     repo_path = _repo_path(server_id)
 
-    patch_result: list[tuple[str, str]] = []
+    # 파일 직접 읽기 (경로 오류 시 파일명으로 rglob fallback)
+    full_path = repo_path / file_path
+    if not full_path.exists():
+        file_name = Path(file_path).name
+        matches = list(repo_path.rglob(file_name))
+        if len(matches) == 1:
+            full_path = matches[0]
+            file_path = full_path.relative_to(repo_path).as_posix()
+            logger.info("[patch] resolved path via rglob: %s", file_path)
+        else:
+            logger.warning("[patch] file not found: %s (candidates=%d)", file_path, len(matches))
+            return None
 
-    base_tools = _make_file_tools(server_id, repo_path)
+    original = full_path.read_text(encoding="utf-8", errors="replace")
 
-    @langchain_tool
-    def submit_patch(file_path: str, content: str) -> str:
-        """수정이 완료된 파일의 경로와 전체 내용을 제출합니다. 파일 수정을 완료했을 때 반드시 호출하세요."""
-        patch_result.append((file_path, content))
-        return "patch submitted"
-
-    tools = base_tools + [submit_patch]
-
-    system_prompt = (
-        "You are applying a code fix to a repository file. "
-        "Use grep_files to locate the file, read_file to get its content, "
-        "apply the fix, then call submit_patch with the COMPLETE modified file."
+    prompt = (
+        "아래 파일에 코드 수정을 적용해줘.\n"
+        "설명 없이 수정이 적용된 파일 전체 내용만 반환해. 마크다운 코드블록 금지.\n\n"
+        f"=== 원본 파일 ===\n{original}\n\n"
+        f"=== Before (교체할 코드) ===\n{before}\n\n"
+        f"=== After (교체될 코드) ===\n{after}"
     )
-    user_message = (
-        f"파일 `{file_path}`에 다음 수정을 적용해줘.\n\n"
-        f"에러 원인: {error_cause}\n"
-        f"수정 내용: {suggested_fix}\n\n"
-        f"Before:\n```\n{before}\n```\n\n"
-        f"After:\n```\n{after}\n```\n\n"
-        "작업 순서:\n"
-        "1. grep_files 또는 read_file로 파일을 찾아 전체 내용을 읽어\n"
-        "2. Before 코드를 After 코드로 교체한 파일 전체 내용을 만들어\n"
-        "3. submit_patch(file_path=<실제 경로>, content=<수정된 파일 전체>)를 호출해"
-    )
-
-    llm = ChatOllama(
-        model=settings.ollama_model,
-        base_url=settings.ollama_host,
-        think=False,
-    )
-    graph = create_react_agent(model=llm, tools=tools, prompt=system_prompt)
 
     try:
-        await asyncio.wait_for(
-            graph.ainvoke(
-                {"messages": [("user", user_message)]},
-                config={"recursion_limit": 20},
-            ),
-            timeout=180,
+        import google.generativeai as genai
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        response = await asyncio.to_thread(
+            model.generate_content,
+            prompt,
+            generation_config=genai.GenerationConfig(temperature=0.1),
         )
-    except (asyncio.TimeoutError, GraphRecursionError) as e:
-        logger.warning("[patch_agent] %s", e)
+        content = _strip_code_fence(response.text.strip())
 
-    if patch_result:
-        p_path, p_content = patch_result[0]
-        logger.info("[patch_agent] submitted: %s len=%d", p_path, len(p_content))
-        return p_path, p_content
+        if not content:
+            logger.warning("[patch] Gemini returned empty content")
+            return None
 
-    logger.warning("[patch_agent] no patch submitted")
-    return None
+        logger.info("[patch] Gemini patched %s len=%d", file_path, len(content))
+        return file_path, content
+
+    except Exception as e:
+        logger.warning("[patch] Gemini call failed: %s", e)
+        return None
 
 
 async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> str:
@@ -239,7 +230,7 @@ async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> st
     from app.services import rag_service
 
     repo_path = _repo_path(server_id)
-    tools = _make_file_tools(server_id, repo_path)
+    tools = _make_file_tools(repo_path)
 
     # Error Memory: 과거 유사 에러 사례 조회
     past_cases = await rag_service.search_error_memory(server_id, raw_log[:1000])
