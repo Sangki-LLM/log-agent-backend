@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import re
@@ -32,6 +33,40 @@ def _parse_suggestion(record: AnalysisRecord) -> dict:
     except (json.JSONDecodeError, TypeError):
         return {}
 
+
+async def _get_file(
+    client: httpx.AsyncClient, owner: str, repo: str, path: str, branch: str, hdrs: dict
+) -> tuple[str, str]:
+    """파일 내용과 blob SHA 반환."""
+    resp = await client.get(
+        f"{_GH_API}/repos/{owner}/{repo}/contents/{path}",
+        headers=hdrs,
+        params={"ref": branch},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    content = base64.b64decode(data["content"]).decode("utf-8")
+    return content, data["sha"]
+
+
+async def _commit_file(
+    client: httpx.AsyncClient,
+    owner: str,
+    repo: str,
+    path: str,
+    content: str,
+    blob_sha: str,
+    branch: str,
+    message: str,
+    hdrs: dict,
+) -> None:
+    encoded = base64.b64encode(content.encode("utf-8")).decode()
+    resp = await client.put(
+        f"{_GH_API}/repos/{owner}/{repo}/contents/{path}",
+        headers=hdrs,
+        json={"message": message, "content": encoded, "sha": blob_sha, "branch": branch},
+    )
+    resp.raise_for_status()
 
 
 async def _create_branch(
@@ -120,16 +155,43 @@ async def create_fix_pr(server: Server, record: AnalysisRecord) -> str:
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             await _create_branch(client, owner, repo, branch_name, server.git_branch, hdrs)
-            await _create_empty_commit(client, owner, repo, branch_name, commit_message, hdrs)
+
+            # 에이전트가 파일을 직접 읽고 수정 적용 시도
+            patched = False
+            patched_file_path = file_patch.get("file_path", "")
+            if patched_file_path:
+                try:
+                    from app.services.ollama_service import patch_file_with_agent
+                    patch_result = await patch_file_with_agent(server.id, suggestion)
+                    if patch_result:
+                        p_path, p_content = patch_result
+                        _, blob_sha = await _get_file(
+                            client, owner, repo, p_path, server.git_branch, hdrs
+                        )
+                        await _commit_file(
+                            client, owner, repo, p_path, p_content,
+                            blob_sha, branch_name, commit_message, hdrs,
+                        )
+                        patched_file_path = p_path
+                        patched = True
+                        logger.info("[github] agent patched and committed: %s", p_path)
+                except Exception as e:
+                    logger.warning("[github] agent patch failed: %s", e)
+
+            if not patched:
+                await _create_empty_commit(client, owner, repo, branch_name, commit_message, hdrs)
+                logger.info("[github] fallback: empty commit (description-only PR)")
 
             pr_body = (
                 f"## 🤖 Log Agent 자동 분석\n\n"
                 f"**에러 원인**: {error_cause}\n\n"
                 f"**수정 내용**: {suggested_fix}\n\n"
             )
-            if file_patch.get("file_path"):
+            if patched:
+                pr_body += f"### ✅ 자동 수정 적용: `{patched_file_path}`\n\n"
+            elif file_patch.get("file_path"):
                 pr_body += (
-                    f"### 수정 제안 파일: `{file_patch['file_path']}`\n\n"
+                    f"### ⚠️ 수동 적용 필요: `{file_patch['file_path']}`\n\n"
                     "**Before**\n"
                     f"```\n{file_patch.get('before', '').strip()}\n```\n\n"
                     "**After**\n"
@@ -149,7 +211,7 @@ async def create_fix_pr(server: Server, record: AnalysisRecord) -> str:
             )
             resp.raise_for_status()
             pr_url = resp.json().get("html_url", "")
-            logger.info("[github] PR created: %s", pr_url)
+            logger.info("[github] PR created: %s (patched=%s)", pr_url, patched)
             return pr_url
 
     except Exception as e:

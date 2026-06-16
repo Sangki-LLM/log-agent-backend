@@ -163,6 +163,77 @@ def _make_file_tools(server_id: int, repo_path: Path):
     return [grep_files, read_file, list_directory]
 
 
+async def patch_file_with_agent(server_id: int, suggestion: dict) -> tuple[str, str] | None:
+    """에이전트가 파일을 직접 읽고 수정을 적용해 (file_path, patched_content) 반환. 실패 시 None."""
+    file_patch = suggestion.get("file_patch", {})
+    file_path = file_patch.get("file_path", "")
+    before = file_patch.get("before", "")
+    after = file_patch.get("after", "")
+    error_cause = suggestion.get("error_cause", "")
+    suggested_fix = suggestion.get("suggested_fix", "")
+
+    if not file_path or not before or not after:
+        return None
+
+    from app.services.git_service import _repo_path
+    repo_path = _repo_path(server_id)
+
+    patch_result: list[tuple[str, str]] = []
+
+    base_tools = _make_file_tools(server_id, repo_path)
+
+    @langchain_tool
+    def submit_patch(file_path: str, content: str) -> str:
+        """수정이 완료된 파일의 경로와 전체 내용을 제출합니다. 파일 수정을 완료했을 때 반드시 호출하세요."""
+        patch_result.append((file_path, content))
+        return "patch submitted"
+
+    tools = base_tools + [submit_patch]
+
+    system_prompt = (
+        "You are applying a code fix to a repository file. "
+        "Use grep_files to locate the file, read_file to get its content, "
+        "apply the fix, then call submit_patch with the COMPLETE modified file."
+    )
+    user_message = (
+        f"파일 `{file_path}`에 다음 수정을 적용해줘.\n\n"
+        f"에러 원인: {error_cause}\n"
+        f"수정 내용: {suggested_fix}\n\n"
+        f"Before:\n```\n{before}\n```\n\n"
+        f"After:\n```\n{after}\n```\n\n"
+        "작업 순서:\n"
+        "1. grep_files 또는 read_file로 파일을 찾아 전체 내용을 읽어\n"
+        "2. Before 코드를 After 코드로 교체한 파일 전체 내용을 만들어\n"
+        "3. submit_patch(file_path=<실제 경로>, content=<수정된 파일 전체>)를 호출해"
+    )
+
+    llm = ChatOllama(
+        model=settings.ollama_model,
+        base_url=settings.ollama_host,
+        think=False,
+    )
+    graph = create_react_agent(model=llm, tools=tools, prompt=system_prompt)
+
+    try:
+        await asyncio.wait_for(
+            graph.ainvoke(
+                {"messages": [("user", user_message)]},
+                config={"recursion_limit": 20},
+            ),
+            timeout=180,
+        )
+    except (asyncio.TimeoutError, GraphRecursionError) as e:
+        logger.warning("[patch_agent] %s", e)
+
+    if patch_result:
+        p_path, p_content = patch_result[0]
+        logger.info("[patch_agent] submitted: %s len=%d", p_path, len(p_content))
+        return p_path, p_content
+
+    logger.warning("[patch_agent] no patch submitted")
+    return None
+
+
 async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> str:
     from app.services.git_service import _repo_path
     from app.services import rag_service
