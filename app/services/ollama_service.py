@@ -202,27 +202,48 @@ async def patch_file_with_agent(server_id: int, suggestion: dict) -> tuple[str, 
         f"=== After (교체될 코드) ===\n{after}"
     )
 
+    # 1차: Gemini
     try:
         import google.generativeai as genai
         genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        model = genai.GenerativeModel("gemini-3.1-flash-lite")
         response = await asyncio.to_thread(
             model.generate_content,
             prompt,
             generation_config=genai.GenerationConfig(temperature=0.1),
         )
         content = _strip_code_fence(response.text.strip())
-
-        if not content:
-            logger.warning("[patch] Gemini returned empty content")
-            return None
-
-        logger.info("[patch] Gemini patched %s len=%d", file_path, len(content))
-        return file_path, content
-
+        if content:
+            logger.info("[patch] Gemini patched %s len=%d", file_path, len(content))
+            return file_path, content
+        logger.warning("[patch] Gemini returned empty content, falling back to Ollama")
     except Exception as e:
-        logger.warning("[patch] Gemini call failed: %s", e)
-        return None
+        logger.warning("[patch] Gemini failed (%s), falling back to Ollama", e)
+
+    # 2차: Ollama 직접 호출
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=5.0)
+        ) as client:
+            resp = await client.post(
+                f"{settings.ollama_host}/api/chat",
+                json={
+                    "model": settings.ollama_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "think": False,
+                },
+            )
+            resp.raise_for_status()
+            content = _strip_code_fence(resp.json().get("message", {}).get("content", ""))
+        if content:
+            logger.info("[patch] Ollama patched %s len=%d", file_path, len(content))
+            return file_path, content
+        logger.warning("[patch] Ollama returned empty content")
+    except Exception as e:
+        logger.warning("[patch] Ollama failed: %s", e)
+
+    return None
 
 
 async def analyze_log(server_id: int, raw_log: str, stack_trace: str = "") -> str:
