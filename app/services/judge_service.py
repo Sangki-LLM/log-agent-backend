@@ -45,7 +45,17 @@ async def judge_fix(error_log: str, llm_suggestion: str) -> dict | None:
     try:
         suggestion = json.loads(llm_suggestion)
     except (json.JSONDecodeError, TypeError):
-        return None
+        # JSON 파싱 실패 시 텍스트에서 JSON 블록 추출 시도
+        import re
+        m = re.search(r"\{.*\}", llm_suggestion, re.DOTALL)
+        if not m:
+            logger.warning("[judge] suggestion is not valid JSON, skipping")
+            return None
+        try:
+            suggestion = json.loads(m.group())
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[judge] suggestion JSON extraction failed, skipping")
+            return None
 
     if not suggestion.get("file_patch", {}).get("file_path"):
         return None
