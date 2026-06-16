@@ -187,11 +187,11 @@ async def create_fix_pr(server: Server, record: AnalysisRecord) -> str:
                 f"**에러 원인**: {error_cause}\n\n"
                 f"**수정 내용**: {suggested_fix}\n\n"
             )
-            if patched:
-                pr_body += f"### ✅ 자동 수정 적용: `{patched_file_path}`\n\n"
-            elif file_patch.get("file_path"):
+            fp_path = patched_file_path or file_patch.get("file_path", "")
+            if fp_path:
+                label = "✅ 자동 수정 적용" if patched else "⚠️ 수동 적용 필요"
                 pr_body += (
-                    f"### ⚠️ 수동 적용 필요: `{file_patch['file_path']}`\n\n"
+                    f"### {label}: `{fp_path}`\n\n"
                     "**Before**\n"
                     f"```\n{file_patch.get('before', '').strip()}\n```\n\n"
                     "**After**\n"
