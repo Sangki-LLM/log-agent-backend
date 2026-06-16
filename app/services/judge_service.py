@@ -62,7 +62,7 @@ async def judge_fix(error_log: str, llm_suggestion: str) -> dict | None:
 
     try:
         genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        model = genai.GenerativeModel(settings.gemini_model)
         prompt = _build_prompt(error_log, suggestion)
 
         response = model.generate_content(

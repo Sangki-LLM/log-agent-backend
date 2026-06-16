@@ -206,7 +206,7 @@ async def patch_file_with_agent(server_id: int, suggestion: dict) -> tuple[str, 
     try:
         import google.generativeai as genai
         genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel("gemini-3.1-flash-lite")
+        model = genai.GenerativeModel(settings.gemini_model)
         response = await asyncio.to_thread(
             model.generate_content,
             prompt,

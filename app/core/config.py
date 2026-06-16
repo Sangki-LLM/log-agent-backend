@@ -23,8 +23,9 @@ class Settings(BaseSettings):
     # Ollama embedding model for RAG
     ollama_embed_model: str = "nomic-embed-text"
 
-    # Gemini API (LLM Judge)
+    # Gemini API
     gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash-lite"
 
     # Public URL of this backend (for Slack approve/reject links)
     public_url: str = "http://localhost:8000"
