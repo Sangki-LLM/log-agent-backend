@@ -172,9 +172,6 @@ async def patch_file_with_agent(server_id: int, suggestion: dict) -> tuple[str, 
 
     if not file_path or not before or not after:
         return None
-    if not settings.gemini_api_key:
-        logger.warning("[patch] gemini_api_key not set, skipping")
-        return None
 
     from app.services.git_service import _repo_path
     repo_path = _repo_path(server_id)
@@ -202,25 +199,7 @@ async def patch_file_with_agent(server_id: int, suggestion: dict) -> tuple[str, 
         f"=== After (교체될 코드) ===\n{after}"
     )
 
-    # 1차: Gemini
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel(settings.gemini_model)
-        response = await asyncio.to_thread(
-            model.generate_content,
-            prompt,
-            generation_config=genai.GenerationConfig(temperature=0.1),
-        )
-        content = _strip_code_fence(response.text.strip())
-        if content:
-            logger.info("[patch] Gemini patched %s len=%d", file_path, len(content))
-            return file_path, content
-        logger.warning("[patch] Gemini returned empty content, falling back to Ollama")
-    except Exception as e:
-        logger.warning("[patch] Gemini failed (%s), falling back to Ollama", e)
-
-    # 2차: Ollama 직접 호출
+    # 1차: Ollama 직접 호출 (로컬, 소스코드 외부 미노출)
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=5.0)
@@ -239,9 +218,31 @@ async def patch_file_with_agent(server_id: int, suggestion: dict) -> tuple[str, 
         if content:
             logger.info("[patch] Ollama patched %s len=%d", file_path, len(content))
             return file_path, content
-        logger.warning("[patch] Ollama returned empty content")
+        logger.warning("[patch] Ollama returned empty content, falling back to Gemini")
     except Exception as e:
-        logger.warning("[patch] Ollama failed: %s", e)
+        logger.warning("[patch] Ollama failed (%s), falling back to Gemini", e)
+
+    # 2차: Gemini (Ollama 실패 시에만, 소스코드 외부 전송됨)
+    if not settings.gemini_api_key:
+        logger.warning("[patch] gemini_api_key not set, cannot fall back")
+        return None
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(settings.gemini_model)
+        response = await asyncio.to_thread(
+            model.generate_content,
+            prompt,
+            generation_config=genai.GenerationConfig(temperature=0.1),
+        )
+        content = _strip_code_fence(response.text.strip())
+        if content:
+            logger.info("[patch] Gemini patched %s len=%d", file_path, len(content))
+            return file_path, content
+        logger.warning("[patch] Gemini returned empty content")
+    except Exception as e:
+        logger.warning("[patch] Gemini failed: %s", e)
 
     return None
 
